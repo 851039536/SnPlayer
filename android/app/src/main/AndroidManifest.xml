@@ -1,5 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.snplayer.app">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- 传统存储权限（Android 10 及以下） -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />

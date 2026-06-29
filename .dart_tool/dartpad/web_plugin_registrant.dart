@@ -6,7 +6,7 @@
 // @dart = 2.13
 // ignore_for_file: type=lint
 
-import 'package:file_picker/_internal/file_picker_web.dart';
+import 'package:file_picker/src/platform/web/file_picker_web.dart';
 import 'package:permission_handler_html/permission_handler_html.dart';
 import 'package:video_player_web/video_player_web.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';

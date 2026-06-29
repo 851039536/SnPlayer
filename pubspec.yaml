@@ -17,7 +17,7 @@ dependencies:
   video_player: ^2.8.0
 
   # 文件选择
-  file_picker: ^6.1.1
+  file_picker: ^11.0.0
 
   # 权限管理
   permission_handler: ^11.0.0
