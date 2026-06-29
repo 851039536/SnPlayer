@@ -43,7 +43,7 @@ class VideoListProvider extends ChangeNotifier {
 
   /// 选择并加密视频
   Future<void> pickAndEncryptVideos({String? targetFolder}) async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       type: FileType.video,
       allowMultiple: true,
     );
