@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../config/crypto.dart';
+
 /// 路径管理服务
 ///
 /// 提供统一的目录路径获取和文件路径构建能力

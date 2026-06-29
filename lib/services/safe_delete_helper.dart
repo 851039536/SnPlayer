@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../models/video_item.dart';
 import '../config/crypto.dart';
