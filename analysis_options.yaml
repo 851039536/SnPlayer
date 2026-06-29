@@ -1,0 +1,7 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    always_use_package_imports: false
+    avoid_print: false
+    curly_braces_in_flow_control_structures: true
