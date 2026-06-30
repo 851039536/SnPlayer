@@ -30,3 +30,5 @@ ios/Flutter/Flutter.podspec
 *.tmp
 .DS_Store
 Thumbs.db
+/.dart_tool/flutter_build
+/.dart_tool/flutter_build
