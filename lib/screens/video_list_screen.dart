@@ -88,8 +88,8 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
     await folderProvider.loadFolders();
     await videoProvider.loadVideos();
-    videoProvider.loadThumbnails();
-    videoProvider.cleanupExpiredThumbnails(); // 启动时清理过期缓存
+    await videoProvider.loadThumbnails(); // 等待缩略图加载完毕再渲染
+    videoProvider.cleanupExpiredThumbnails(); // 后台清理过期缓存
 
     if (mounted) {
       setState(() { _isInitializing = false; });
