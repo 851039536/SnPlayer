@@ -54,7 +54,7 @@ class ActionSheet extends StatelessWidget {
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -62,7 +62,7 @@ class ActionSheet extends StatelessWidget {
             Center(
               child: Container(
                 margin: const EdgeInsets.only(
-                  top: AppSpacing.md, bottom: AppSpacing.md),
+                  top: AppSpacing.sm, bottom: AppSpacing.sm),
                 width: 32,
                 height: 4,
                 decoration: BoxDecoration(
@@ -76,7 +76,7 @@ class ActionSheet extends StatelessWidget {
             if (title != null) ...[
               Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.xxl, vertical: AppSpacing.md),
+                  horizontal: AppSpacing.xxl, vertical: AppSpacing.sm),
                 child: Text(
                   title!,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -91,15 +91,15 @@ class ActionSheet extends StatelessWidget {
             ...items.map((item) => _buildItem(context, item)),
 
             // 取消按钮
-            const SizedBox(height: AppSpacing.md),
+            const SizedBox(height: AppSpacing.sm),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
                   onPressed: () => Navigator.pop(context),
                   style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppRadius.lg),
                     ),
@@ -124,12 +124,12 @@ class ActionSheet extends StatelessWidget {
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.xxl, vertical: AppSpacing.lg),
+          horizontal: AppSpacing.xl, vertical: AppSpacing.md),
         child: Row(
           children: [
             Container(
-              width: 40,
-              height: 40,
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
                 color: (item.color ?? colorScheme.primary).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(AppRadius.sm + 4),
@@ -137,10 +137,10 @@ class ActionSheet extends StatelessWidget {
               child: Icon(
                 item.icon,
                 color: item.color ?? colorScheme.primary,
-                size: 22,
+                size: 20,
               ),
             ),
-            const SizedBox(width: AppSpacing.xl),
+            const SizedBox(width: AppSpacing.lg),
             Text(
               item.label,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
