@@ -140,6 +140,70 @@ class CryptoService {
     }
   }
 
+  /// 在后台 Isolate 中执行部分解密，通过 SendPort 接收进度事件
+  ///
+  /// 与 [_runInIsolate] 共享相同的 Isolate 生命周期管理，额外传递 [maxBytes] 参数。
+  static Future<void> _runPartialInIsolate({
+    required String command,
+    required String inputPath,
+    required String outputPath,
+    required int maxBytes,
+  }) async {
+    final completer = Completer<void>();
+
+    final receivePort = ReceivePort();
+    final isolate = await Isolate.spawn(cryptoWorker, receivePort.sendPort);
+
+    final workerSendPort = await receivePort.first as SendPort;
+
+    final progressPort = ReceivePort();
+    progressPort.listen((event) {
+      if (event is Map) {
+        final type = event['type'] as String?;
+        if (type == 'done') {
+          if (!completer.isCompleted) {
+            completer.complete();
+          }
+        } else if (type == 'error') {
+          final message = event['message'] as String? ?? 'Unknown error';
+          if (!completer.isCompleted) {
+            completer.completeError(Exception(message));
+          }
+        }
+      }
+    });
+
+    try {
+      workerSendPort.send({
+        'command': command,
+        'inputPath': inputPath,
+        'outputPath': outputPath,
+        'password': defaultPassword,
+        'progressPort': progressPort.sendPort,
+        'maxBytes': maxBytes,
+      });
+
+      // 30MB 部分解密通常在 1-3 秒内完成，30 秒超时留足余量
+      await completer.future.timeout(const Duration(seconds: 30), onTimeout: () {
+        throw TimeoutException(
+            'Isolate $command 操作超时 (30s): $inputPath');
+      });
+    } catch (e) {
+      debugPrint('[SnPlayer] CryptoService._runPartialInIsolate: $e');
+      rethrow;
+    } finally {
+      progressPort.close();
+      receivePort.close();
+      try {
+        isolate.kill(priority: Isolate.beforeNextEvent);
+      } catch (e) {
+        debugPrint(
+            '[SnPlayer] CryptoService._runPartialInIsolate: Isolate.kill failed $e');
+        isolate.kill(priority: Isolate.immediate);
+      }
+    }
+  }
+
   /// 解密到临时缓存文件，返回临时文件路径
   static Future<String> decryptToTemp(String encPath, String cacheDir) async {
     final fileName = p.basenameWithoutExtension(encPath);
@@ -151,6 +215,32 @@ class CryptoService {
     await decryptFile(encPath, tempPath);
     return tempPath;
   }
+
+  /// 部分解密到临时文件（仅解密用于缩略图提取的前 N MB）
+  ///
+  /// 临时文件命名 `thumb_partial_{videoId}.mp4`，与播放缓存 `play_*.mp4` 隔离。
+  /// [videoId] 用于生成唯一临时文件名。
+  /// [maxBytes] 最大解密字节数，默认 [partialDecryptMaxBytes]（30MB）。
+  static Future<String> decryptToTempPartial(
+    String encPath,
+    String cacheDir,
+    String videoId, {
+    int maxBytes = partialDecryptMaxBytes,
+  }) async {
+    final tempPath = p.join(cacheDir, 'thumb_partial_$videoId.mp4');
+
+    // 确保缓存目录存在
+    await Directory(cacheDir).create(recursive: true);
+
+    await _runPartialInIsolate(
+      command: 'decrypt_partial',
+      inputPath: encPath,
+      outputPath: tempPath,
+      maxBytes: maxBytes,
+    );
+    return tempPath;
+  }
+
 
   /// 加密数据块（用于缩略图等内存数据）
   static Future<Uint8List> encryptBytes(Uint8List data) async {

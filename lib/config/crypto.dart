@@ -35,13 +35,19 @@ const int ciphertextOffset = 64;
 const int aesBlockSize = 16;
 
 /// 缩略图宽度（像素，匹配网格卡片显示宽度）
-const int thumbnailWidth = 280;
+const int thumbnailWidth = 480;
 
 /// 缩略图高度（像素，16:9 比例）
-const int thumbnailHeight = 158;
+const int thumbnailHeight = 270;
 
-/// 缩略图 JPEG 质量（0-100，90 平衡清晰度与文件大小）
-const int thumbnailQuality = 90;
+/// 缩略图 JPEG 质量（0-100，95 接近无损，保障画面清晰度）
+const int thumbnailQuality = 95;
+
+/// 部分解密提取缩略图的最大字节数（30MB）
+///
+/// AES-256-CTR 流加密支持从任意位置解密。
+/// 视频首帧 + moov atom 通常在前 5-10MB 内，30MB 留足余量。
+const int partialDecryptMaxBytes = 30 * 1024 * 1024;
 
 /// 缩略图分批加载每批数量
 const int thumbnailBatchSize = 3;

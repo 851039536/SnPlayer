@@ -92,7 +92,10 @@ class VideoListProvider extends ChangeNotifier {
         );
 
         // 生成加密缩略图
-        await ThumbnailService.generateAndEncryptThumbnail(file.path!, thumbPath);
+        final thumbResult = await ThumbnailService.generateAndEncryptThumbnail(file.path!, thumbPath);
+        if (thumbResult == null) {
+          debugPrint('[SnPlayer] VideoListProvider.pickAndEncryptVideos: thumbnail generation failed for ${file.path}');
+        }
       } catch (e) {
         debugPrint('[SnPlayer] VideoListProvider.pickAndEncryptVideos: $e');
         _setProcessingState(videoId, '加密失败');
@@ -214,7 +217,10 @@ class VideoListProvider extends ChangeNotifier {
 
     // 启动后台队列逐条生成缺失缩略图（不阻塞 UI）
     if (_missingThumbnails.isNotEmpty) {
+      debugPrint('[SnPlayer] VideoListProvider: 发现 ${_missingThumbnails.length} 个视频缺少缩略图，启动后台生成队列');
       unawaited(_startBackgroundGeneration(cacheDir));
+    } else {
+      debugPrint('[SnPlayer] VideoListProvider: 所有视频缩略图已就绪');
     }
   }
 
@@ -264,6 +270,7 @@ class VideoListProvider extends ChangeNotifier {
     _isBackgroundGenRunning = true;
     _missingThumbnailTotal = _missingThumbnails.length;
     _missingThumbnailProcessed = 0;
+    debugPrint('[SnPlayer] VideoListProvider: 后台开始生成 $_missingThumbnailTotal 张缺失缩略图');
     notifyListeners();
 
     try {
@@ -272,17 +279,22 @@ class VideoListProvider extends ChangeNotifier {
         if (_thumbnailToken.isCancelled) { break; }
 
         _missingThumbnailProcessed++;
+        final shortId = video.id.length > 8 ? video.id.substring(0, 8) : video.id;
+        debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 $_missingThumbnailProcessed/$_missingThumbnailTotal [$shortId]');
         notifyListeners();
 
         try {
-          video.thumbCachePath = await ThumbnailService.generateThumbnailFromEncrypted(
+          video.thumbCachePath = await ThumbnailService.generateThumbnailFromEncryptedPartial(
             video.encPath, video.thumbPath, cacheDir, video.id,
           );
           if (video.thumbCachePath != null) {
+            debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成成功');
             notifyListeners(); // 立即刷新该卡片的缩略图
+          } else {
+            debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成失败（返回null）');
           }
         } catch (e) {
-          debugPrint('[SnPlayer] VideoListProvider._startBackgroundGeneration: $e');
+          debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 异常: $e');
         }
 
         // 间隔让出主线程，保持 UI 流畅
@@ -293,6 +305,7 @@ class VideoListProvider extends ChangeNotifier {
       _isBackgroundGenRunning = false;
       _missingThumbnailTotal = 0;
       _missingThumbnailProcessed = 0;
+      debugPrint('[SnPlayer] VideoListProvider: 后台缩略图生成队列完成');
       notifyListeners();
     }
   }

@@ -40,6 +40,9 @@ void cryptoWorker(SendPort sendPort) {
         await _encryptFileInIsolate(inputPath, outputPath, password, progressPort);
       } else if (command == 'decrypt') {
         await _decryptFileInIsolate(inputPath, outputPath, password, progressPort);
+      } else if (command == 'decrypt_partial') {
+        final maxBytes = message['maxBytes'] as int? ?? partialDecryptMaxBytes;
+        await _decryptFilePartialInIsolate(inputPath, outputPath, password, progressPort, maxBytes);
       } else {
         progressPort?.send({'type': 'error', 'message': 'Unknown command: $command'});
         return;
@@ -111,7 +114,41 @@ Future<void> _decryptFileInIsolate(
   );
 }
 
+/// 部分解密文件（仅解密前 [maxBytes] 字节，用于快速提取缩略图）
+Future<void> _decryptFilePartialInIsolate(
+  String inputPath,
+  String outputPath,
+  String password,
+  SendPort? progressPort,
+  int maxBytes,
+) async {
+  final passwordBytes = Uint8List.fromList(utf8.encode(password));
+
+  // 读取文件头获取 IV 和盐值
+  final inputFile = File(inputPath);
+  final raf = inputFile.openSync(mode: FileMode.read);
+  final header = Uint8List(headerSize);
+  raf.readIntoSync(header, 0, headerSize);
+  raf.closeSync();
+
+  final iv = Uint8List.sublistView(header, 0, ivLength);
+  final salt = Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
+
+  final key = CryptoUtils.deriveKeyFromPassword(passwordBytes, salt);
+  final cipher = CryptoUtils.createCtrCipher(key, iv);
+
+  await _processFile(inputPath, outputPath, cipher,
+    headerBuilder: null,
+    startOffset: headerSize,
+    progressPort: progressPort,
+    maxBytes: maxBytes,
+  );
+}
+
 /// 双缓冲 I/O + CTR 流式处理核心
+///
+/// [maxBytes] 可选，限制解密的最大字节数。用于部分解密提取缩略图场景：
+/// 达到上限后立即停止读取并 flush 输出，不处理剩余数据。
 Future<void> _processFile(
   String inputPath,
   String outputPath,
@@ -119,6 +156,7 @@ Future<void> _processFile(
   Uint8List? Function()? headerBuilder,
   int startOffset = 0,
   SendPort? progressPort,
+  int? maxBytes,
 }) async {
   final inputFile = File(inputPath);
   final raf = inputFile.openSync(mode: FileMode.read);
@@ -144,38 +182,48 @@ Future<void> _processFile(
     final procBuf = Uint8List(bufferSize);
 
     bool useA = true;
-    int totalRead = startOffset;
+    int totalDecrypted = 0; // 已解密字节数（用于 maxBytes 控制）
 
     int bytesRead = raf.readIntoSync(bufA);
-    totalRead += bytesRead;
 
     while (bytesRead > 0) {
       final readBuf = useA ? bufA : bufB;
       final nextBuf = useA ? bufB : bufA;
 
+      // 截断：最后一轮可能只需要处理部分缓冲区
+      int processLen = bytesRead;
+      if (maxBytes != null) {
+        final remaining = maxBytes - totalDecrypted;
+        if (remaining <= 0) { break; }
+        if (processLen > remaining) {
+          processLen = remaining;
+        }
+      }
+
       // 启动下一块的异步预读
       final pendingRead = raf.readInto(nextBuf);
 
       // 处理当前块：CTR 批量加解密
-      cipher.processBytes(readBuf, 0, bytesRead, procBuf, 0);
-      // 必须用 sublist（复制），因为 procBuf 下一轮会被覆盖，
-      // 若 IOSink 尚未 flush 则会引用到已被改写的数据
-      output.add(procBuf.sublist(0, bytesRead));
+      cipher.processBytes(readBuf, 0, processLen, procBuf, 0);
+      output.add(procBuf.sublist(0, processLen));
+      totalDecrypted += processLen;
 
       // 进度回传
       if (progressPort != null) {
-        final effectiveSize = fileSize - startOffset;
+        final effectiveSize = maxBytes ?? (fileSize - startOffset);
         if (effectiveSize > 0) {
           progressPort.send({
             'type': 'progress',
-            'value': (totalRead - bytesRead - startOffset) / effectiveSize,
+            'value': totalDecrypted / effectiveSize,
           });
         }
       }
 
+      // 达到上限后立即停止
+      if (maxBytes != null && totalDecrypted >= maxBytes) { break; }
+
       // 等待预读
       bytesRead = await pendingRead;
-      totalRead += bytesRead;
       useA = !useA;
     }
   } finally {

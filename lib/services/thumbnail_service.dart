@@ -149,15 +149,20 @@ class ThumbnailService {
   ) async {
     String? tempPath;
     try {
+      final shortId = videoId.length > 8 ? videoId.substring(0, 8) : videoId;
       // 1. 解密视频到临时文件（放入 play_cache 以便统一清理）
+      debugPrint('[SnPlayer] ThumbnailService: [$shortId] 完整解密中...');
       final playCacheDir = await PathProviderService.getCacheDir();
       tempPath = await CryptoService.decryptToTemp(encPath, playCacheDir);
+      debugPrint('[SnPlayer] ThumbnailService: [$shortId] 解密完成，提取帧...');
 
       // 2. 从临时文件提取缩略帧
       final jpegBytes = await extractThumbnail(tempPath);
       if (jpegBytes == null) {
+        debugPrint('[SnPlayer] ThumbnailService: [$shortId] 提取帧失败');
         return null;
       }
+      debugPrint('[SnPlayer] ThumbnailService: [$shortId] 提取帧成功，保存 .tenc...');
 
       // 3. 加密 JPEG 数据并写入 .tenc 文件
       final encrypted = await CryptoService.encryptBytes(jpegBytes);
@@ -167,6 +172,7 @@ class ThumbnailService {
 
       // 4. 解密到磁盘缓存供 UI 显示
       final cachePath = await decryptThumbnailToCache(videoId, thumbPath, cacheDir);
+      debugPrint('[SnPlayer] ThumbnailService: [$shortId] 缩略图生成完成 → $cachePath');
       return cachePath;
     } catch (e) {
       debugPrint('[SnPlayer] ThumbnailService.generateThumbnailFromEncrypted: $e');
@@ -181,6 +187,72 @@ class ThumbnailService {
         }
       }
     }
+  }
+
+  /// 从加密视频生成缩略图（部分解密优化版）
+  ///
+  /// 先尝试部分解密（仅前 [partialDecryptMaxBytes] 30MB）再提取帧。
+  /// 若任一步骤失败（部分解密异常、截断文件无法解析等），自动回退到完整解密。
+  ///
+  /// 返回磁盘缓存路径，失败返回 null
+  static Future<String?> generateThumbnailFromEncryptedPartial(
+    String encPath,
+    String thumbPath,
+    String cacheDir,
+    String videoId,
+  ) async {
+    String? tempPath;
+    bool partialOk = false;
+    final shortId = videoId.length > 8 ? videoId.substring(0, 8) : videoId;
+
+    // --- 阶段 1：尝试部分解密 ---
+    try {
+      final playCacheDir = await PathProviderService.getCacheDir();
+      debugPrint('[SnPlayer] ThumbnailService: [$shortId] 阶段1/3: 部分解密30MB...');
+      tempPath = await CryptoService.decryptToTempPartial(
+        encPath, playCacheDir, videoId,
+      );
+
+      debugPrint('[SnPlayer] ThumbnailService: [$shortId] 阶段2/3: 从截断文件提取帧...');
+      final jpegBytes = await extractThumbnail(tempPath);
+      if (jpegBytes != null) {
+        // 部分解密成功！
+        debugPrint('[SnPlayer] ThumbnailService: [$shortId] 部分解密提取成功');
+        partialOk = true;
+
+        // 加密 JPEG 并写入 .tenc
+        final encrypted = await CryptoService.encryptBytes(jpegBytes);
+        final thumbFile = File(thumbPath);
+        await thumbFile.parent.create(recursive: true);
+        await thumbFile.writeAsBytes(encrypted);
+
+        // 解密到磁盘缓存
+        final cachePath = await decryptThumbnailToCache(videoId, thumbPath, cacheDir);
+        return cachePath;
+      }
+      // extract 返回 null → 视频可能 moov atom 在尾部，需要完整解密
+    } catch (e) {
+      debugPrint('[SnPlayer] ThumbnailService: [$shortId] 部分解密异常: $e');
+      // 异常也继续走回退路径
+    } finally {
+      // 清理临时文件
+      if (tempPath != null) {
+        try { await File(tempPath).delete(); } catch (_) {}
+      }
+    }
+
+    // --- 阶段 2：回退到完整解密 ---
+    if (!partialOk) {
+      debugPrint('[SnPlayer] ThumbnailService: [$shortId] 阶段3/3: 回退完整解密...');
+      try {
+        return await generateThumbnailFromEncrypted(encPath, thumbPath, cacheDir, videoId);
+      } catch (e) {
+        debugPrint('[SnPlayer] ThumbnailService: [$shortId] 完整解密也失败: $e');
+        return null;
+      }
+    }
+
+    return null;
   }
 
   /// 清理过期的磁盘缓存文件
