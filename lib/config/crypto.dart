@@ -22,8 +22,9 @@ const int reservedSize = 32;
 /// PBKDF2 迭代次数
 const int pbkdf2Iterations = 100000;
 
-/// 流式加解密缓冲区大小（512KB）
-const int bufferSize = 512 * 1024;
+/// 流式加解密缓冲区大小（4MB）
+/// 从 512KB 提升至 4MB，减少系统调用次数约 87.5%，提升 I/O 吞吐
+const int bufferSize = 4 * 1024 * 1024;
 
 /// PBKDF2 Salt 在文件头中的偏移量
 const int saltOffset = 16;
@@ -60,6 +61,23 @@ const int safeDeleteBlockSize = 4096;
 
 /// 安全删除重试间隔序列（毫秒）
 const List<int> safeDeleteRetryDelays = [3000, 6000, 12000, 24000, 30000];
+
+// ═══════════════════════════════════════════════════════════
+// 并行解密配置
+// ═══════════════════════════════════════════════════════════
+
+/// 触发并行解密的最小文件大小（64MB）
+/// 低于此值使用单 Isolate 串行解密，避免 Isolate 启动开销 > 并行收益
+const int parallelDecryptMinFileSize = 64 * 1024 * 1024;
+
+/// 中等文件阈值（256MB），超过此值使用 4 Isolate，否则用 2 Isolate
+const int parallelDecryptMidFileSize = 256 * 1024 * 1024;
+
+/// 并行解密最大 Isolate 数
+const int parallelDecryptMaxIsolates = 4;
+
+/// 并行解密中等 Isolate 数（2 路并行，用于 64-256MB 文件）
+const int parallelDecryptMidIsolates = 2;
 
 /// 加密视频存储根目录（相对 /sdcard/Download/）
 const String lockVideoDirName = 'MewTool/LockVideo';

@@ -79,6 +79,38 @@ class SafeDeleteHelper {
     return encDeleted && thumbDeleted;
   }
 
+  /// 快速删除文件（无零覆写，用于非敏感的播放临时文件）
+  ///
+  /// 与 [safeDelete] 不同，此方法跳过零覆写阶段，直接删除文件。
+  /// 适用于播放缓存临时文件、并行解密块临时文件等非敏感数据。
+  /// 失败时简单重试 3 次，不复写内容。
+  static Future<bool> fastDelete(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      return true;
+    }
+
+    const retryDelays = [100, 500, 1000]; // ms
+
+    for (int attempt = 0; attempt < retryDelays.length; attempt++) {
+      try {
+        await file.delete();
+
+        if (!await file.exists()) {
+          return true;
+        }
+      } catch (e) {
+        debugPrint('[SnPlayer] SafeDeleteHelper.fastDelete 尝试 $attempt 失败: $e');
+      }
+
+      if (attempt < retryDelays.length - 1) {
+        await Future.delayed(Duration(milliseconds: retryDelays[attempt]));
+      }
+    }
+
+    return false;
+  }
+
   /// 清理播放缓存目录中超过 maxAge 的临时文件
   static Future<int> cleanupCacheFiles(String cacheDir, Duration maxAge) async {
     final dir = Directory(cacheDir);

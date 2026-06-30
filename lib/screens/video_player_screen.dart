@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,14 +6,14 @@ import 'package:video_player/video_player.dart';
 import '../services/crypto_service.dart';
 import '../services/safe_delete_helper.dart';
 import '../services/path_provider_service.dart';
-import '../config/crypto.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/player/player_gesture.dart';
 import '../widgets/player/player_controls.dart';
 
 /// 视频播放页面
 ///
-/// 内置播放器，解密到临时缓存后播放，退出时 30s 自动清理。
+/// 内置播放器，解密到临时缓存后播放，退出页面时自动清理临时文件。
+/// 大文件（≥64MB）自动启用并行分块解密加速。
 /// 支持手势控制（双击跳过、滑动 seek）、控制按钮、倍速等功能。
 class VideoPlayerScreen extends StatefulWidget {
   final String encPath;
@@ -35,7 +34,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _isLoading = true;
   String? _error;
   String? _tempPath;
-  Timer? _deleteTimer;
 
   bool _isFullscreen = false;
 
@@ -46,10 +44,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> _initPlayer() async {
-    // 取消旧定时器，防止与之前的临时文件清理产生竞态
-    _deleteTimer?.cancel();
-    _deleteTimer = null;
-
     try {
       final cacheDir = await PathProviderService.getCacheDir();
       _tempPath = await CryptoService.decryptToTemp(widget.encPath, cacheDir);
@@ -66,18 +60,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           _isLoading = false;
         });
       }
-
-      // 30 秒后自动删除临时文件（使用 Timer 以获得可取消的引用）
-      if (mounted) {
-        _deleteTimer = Timer(
-          const Duration(milliseconds: playCacheDeleteDelayMs),
-          () {
-            if (_tempPath != null) {
-              unawaited(_safeDeleteTempFile(_tempPath!));
-            }
-          },
-        );
-      }
     } catch (e) {
       debugPrint('[SnPlayer] VideoPlayerScreen._initPlayer: $e');
       if (mounted) {
@@ -86,13 +68,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           _error = '播放失败: $e';
         });
       }
-    }
-  }
-
-  Future<void> _safeDeleteTempFile(String path) async {
-    final ok = await SafeDeleteHelper.safeDelete(path);
-    if (!ok) {
-      debugPrint('[SnPlayer] VideoPlayerScreen: 临时文件删除失败 $path');
     }
   }
 
@@ -115,12 +90,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   @override
   void dispose() {
-    _deleteTimer?.cancel();
-    _deleteTimer = null;
     _controller?.dispose();
     // 离开页面时立即清理临时文件
     if (_tempPath != null) {
-      unawaited(_safeDeleteTempFile(_tempPath!));
+      SafeDeleteHelper.fastDelete(_tempPath!);
     }
     super.dispose();
   }

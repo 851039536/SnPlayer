@@ -15,7 +15,8 @@ import 'crypto_isolate.dart';
 ///
 /// 兼容 MewTool .enc 文件格式（64 字节文件头：IV + Salt + 保留字段）
 /// 采用 PBKDF2-HMAC-SHA256 密钥派生 + AES-256-CTR 流式加密
-/// 512KB 双缓冲流水线，I/O 与 CPU 计算重叠
+/// 4MB 双缓冲流水线，I/O 与 CPU 计算重叠
+/// 大文件（≥64MB）自动启用 2-4 路并行分块解密
 class CryptoService {
   /// 从固定密码和指定盐值派生 32 字节 AES 密钥
   /// 密码固定，以 salt 的 base64 编码作为缓存 key，避免重复的 100K 迭代开销
@@ -205,15 +206,62 @@ class CryptoService {
   }
 
   /// 解密到临时缓存文件，返回临时文件路径
-  static Future<String> decryptToTemp(String encPath, String cacheDir) async {
+  ///
+  /// 自动根据文件大小选择解密策略：
+  /// - < 64MB：单 Isolate 串行解密
+  /// - 64MB~256MB：2 Isolate 并行分块解密
+  /// - > 256MB：4 Isolate 并行分块解密
+  static Future<String> decryptToTemp(
+    String encPath,
+    String cacheDir, {
+    void Function(double)? onProgress,
+  }) async {
     final fileName = p.basenameWithoutExtension(encPath);
     final tempPath = p.join(cacheDir, 'play_$fileName.mp4');
 
     // 确保缓存目录存在
     await Directory(cacheDir).create(recursive: true);
 
-    await decryptFile(encPath, tempPath);
+    // 检测文件大小，自动选择串行或并行解密
+    final fileSize = await File(encPath).length();
+    if (fileSize >= parallelDecryptMinFileSize) {
+      await decryptFileParallel(encPath, tempPath, onProgress: onProgress);
+    } else {
+      await decryptFile(encPath, tempPath, onProgress: onProgress);
+    }
+
     return tempPath;
+  }
+
+  /// 并行分块解密文件
+  ///
+  /// 利用 AES-CTR 的随机访问特性，将密文数据切分为 2~4 块，
+  /// 各块在独立 Isolate 中并行解密，最后按序合并。
+  ///
+  /// 文件大小 < 64MB 不触发并行（由 [decryptToTemp] 控制）。
+  static Future<void> decryptFileParallel(
+    String inputPath,
+    String outputPath, {
+    void Function(double)? onProgress,
+  }) async {
+    final chunksDir = p.join(p.dirname(outputPath), 'chunks');
+
+    try {
+      // 确保块临时目录存在
+      await Directory(chunksDir).create(recursive: true);
+
+      await _runParallelDecrypt(
+        inputPath: inputPath,
+        outputPath: outputPath,
+        chunksDir: chunksDir,
+        onProgress: onProgress,
+      );
+    } finally {
+      // 清理块临时目录
+      if (await Directory(chunksDir).exists()) {
+        await Directory(chunksDir).delete(recursive: true);
+      }
+    }
   }
 
   /// 部分解密到临时文件（仅解密用于缩略图提取的前 N MB）
@@ -279,7 +327,199 @@ class CryptoService {
     return decrypted;
   }
 
-  // --- 内部方法 ---
+  // --- 并行解密 ---
+
+  /// 并行分块解密核心调度
+  ///
+  /// 1. 读取文件头获取 IV + Salt
+  /// 2. 派生密钥（命中缓存则跳过 PBKDF2）
+  /// 3. 计算分块数和边界
+  /// 4. 为每块计算 adjusted IV
+  /// 5. 并行 spawn Isolate 执行各块解密
+  /// 6. 所有块完成后 merge
+  static Future<void> _runParallelDecrypt({
+    required String inputPath,
+    required String outputPath,
+    required String chunksDir,
+    void Function(double)? onProgress,
+  }) async {
+    // 1. 读取文件头获取 IV 和 Salt
+    final inputFile = File(inputPath);
+    final raf = await inputFile.open(mode: FileMode.read);
+    final header = Uint8List(headerSize);
+    await raf.readInto(header, 0, headerSize);
+    final fileSize = await raf.length();
+    await raf.close();
+
+    final iv = Uint8List.sublistView(header, 0, ivLength);
+    final salt = Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
+
+    // 2. 派生密钥
+    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
+    final key = deriveKey(passwordBytes, salt);
+    final keyBase64 = base64.encode(key);
+
+    // 3. 计算分块数和每块边界
+    final cipherDataSize = fileSize - headerSize;
+    final isolateCount = _getChunkCount(cipherDataSize);
+    final chunkSize = cipherDataSize ~/ isolateCount;
+
+    debugPrint('[SnPlayer] 并行解密: 文件=${fileSize}B, 密文=${cipherDataSize}B, '
+        '分$isolateCount块, 每块≈${(chunkSize / 1024 / 1024).toStringAsFixed(1)}MB');
+
+    // 4. 为每个块启动 Isolate
+    final chunkPaths = <String>[];
+    final pendingFutures = <Future<void>>[];
+
+    for (int i = 0; i < isolateCount; i++) {
+      final startOffset = i * chunkSize;
+      final length = (i == isolateCount - 1)
+          ? cipherDataSize - startOffset
+          : chunkSize;
+
+      // 计算调整后的 IV：counter += startOffset / 16
+      final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
+      final ivBase64 = base64.encode(adjustedIv);
+
+      final chunkPath = p.join(chunksDir, 'chunk_$i.tmp');
+      chunkPaths.add(chunkPath);
+
+      final future = _spawnChunkIsolate(
+        inputPath: inputPath,
+        outputPath: chunkPath,
+        startOffset: startOffset,
+        chunkLength: length,
+        keyBase64: keyBase64,
+        ivBase64: ivBase64,
+        chunkIndex: i,
+        totalChunks: isolateCount,
+        onProgress: onProgress,
+      );
+
+      pendingFutures.add(future);
+    }
+
+    // 5. 等待所有块完成
+    await Future.wait(pendingFutures);
+
+    // 6. 合并块文件
+    debugPrint('[SnPlayer] 并行解密完成，开始合并 $isolateCount 个块...');
+    await _mergeChunks(chunkPaths, outputPath);
+
+    // 通知 100% 进度
+    onProgress?.call(1.0);
+  }
+
+  /// 确定分块数
+  static int _getChunkCount(int cipherDataSize) {
+    if (cipherDataSize >= parallelDecryptMidFileSize) {
+      return parallelDecryptMaxIsolates;
+    }
+    return parallelDecryptMidIsolates;
+  }
+
+  /// 启动单个块解密 Isolate
+  static Future<void> _spawnChunkIsolate({
+    required String inputPath,
+    required String outputPath,
+    required int startOffset,
+    required int chunkLength,
+    required String keyBase64,
+    required String ivBase64,
+    required int chunkIndex,
+    required int totalChunks,
+    void Function(double)? onProgress,
+  }) async {
+    final completer = Completer<void>();
+
+    final receivePort = ReceivePort();
+    final isolate = await Isolate.spawn(cryptoWorker, receivePort.sendPort);
+    final workerSendPort = await receivePort.first as SendPort;
+
+    final progressPort = ReceivePort();
+    progressPort.listen((event) {
+      if (event is Map) {
+        final type = event['type'] as String?;
+        if (type == 'progress') {
+          final value = (event['value'] as num?)?.toDouble();
+          if (value != null && onProgress != null) {
+            // 加权聚合：每个块的进度映射到全局进度
+            final globalProgress =
+                (chunkIndex + value) / totalChunks;
+            onProgress(globalProgress);
+          }
+        } else if (type == 'done') {
+          if (!completer.isCompleted) {
+            completer.complete();
+          }
+        } else if (type == 'error') {
+          final message = event['message'] as String? ?? 'Unknown error';
+          if (!completer.isCompleted) {
+            completer.completeError(Exception(
+                'Chunk $chunkIndex/$totalChunks 解密失败: $message'));
+          }
+        }
+      }
+    });
+
+    try {
+      workerSendPort.send({
+        'command': 'decrypt_chunk',
+        'inputPath': inputPath,
+        'outputPath': outputPath,
+        'startOffset': startOffset,
+        'chunkLength': chunkLength,
+        'keyBase64': keyBase64,
+        'ivBase64': ivBase64,
+        'chunkIndex': chunkIndex,
+        'totalChunks': totalChunks,
+        'progressPort': progressPort.sendPort,
+      });
+
+      await completer.future.timeout(_isolateTimeout, onTimeout: () {
+        throw TimeoutException(
+            '块 $chunkIndex/$totalChunks 解密超时 (${_isolateTimeout.inSeconds}s)');
+      });
+    } finally {
+      progressPort.close();
+      receivePort.close();
+      try {
+        isolate.kill(priority: Isolate.beforeNextEvent);
+      } catch (e) {
+        isolate.kill(priority: Isolate.immediate);
+      }
+    }
+  }
+
+  /// 按序合并各块文件到最终输出文件
+  static Future<void> _mergeChunks(List<String> chunkPaths, String outputPath) async {
+    final output = File(outputPath).openWrite(mode: FileMode.writeOnly);
+
+    try {
+      // 4MB merge 缓冲区，减少系统调用
+      final mergeBuf = Uint8List(bufferSize);
+
+      for (final chunkPath in chunkPaths) {
+        final chunkFile = File(chunkPath);
+        final raf = await chunkFile.open(mode: FileMode.read);
+
+        try {
+          int bytesRead;
+          do {
+            bytesRead = await raf.readInto(mergeBuf);
+            if (bytesRead > 0) {
+              output.add(mergeBuf.sublist(0, bytesRead));
+            }
+          } while (bytesRead == bufferSize);
+        } finally {
+          await raf.close();
+        }
+      }
+    } finally {
+      await output.flush();
+      await output.close();
+    }
+  }
 
   /// 创建 AES-256-CTR cipher 并初始化
   static StreamCipher _createCipher(Uint8List key, Uint8List iv) {

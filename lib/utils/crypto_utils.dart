@@ -41,4 +41,29 @@ class CryptoUtils {
       );
     return cipher;
   }
+
+  /// 将 16 字节 IV 视为 big-endian 无符号整数，加上 [increment] 后返回新的 IV
+  ///
+  /// CTR 模式下，PointyCastle 将 16 字节 IV 整体作为 big-endian counter，
+  /// 每处理一个 16 字节块 counter 自增 1。
+  /// 因此字节偏移为 S 的数据块，其起始 counter = original_iv + (S / 16)。
+  ///
+  /// [increment] 应为块序号（byteOffset / 16），而非字节偏移量。
+  static Uint8List incrementCounter(Uint8List iv, int increment) {
+    if (increment <= 0) {
+      return Uint8List.fromList(iv);
+    }
+
+    final result = Uint8List.fromList(iv);
+    int carry = increment;
+
+    // 从最低有效字节（索引 15）向最高有效字节（索引 0）进位
+    for (int i = 15; i >= 0 && carry > 0; i--) {
+      final sum = result[i] + carry;
+      result[i] = sum & 0xFF;
+      carry = sum >> 8;
+    }
+
+    return result;
+  }
 }
