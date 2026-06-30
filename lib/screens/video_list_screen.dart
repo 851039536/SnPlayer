@@ -8,6 +8,8 @@ import 'package:provider/provider.dart';
 import '../models/video_item.dart';
 import '../providers/video_list_provider.dart';
 import '../providers/folder_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 import '../services/crypto_service.dart';
 import '../services/permission_service.dart';
 import '../services/path_provider_service.dart';
@@ -208,12 +210,8 @@ class _VideoListScreenState extends State<VideoListScreen> {
       actions: [
         IconButton(
           icon: const Icon(Icons.add_rounded, size: 20),
-          tooltip: '添加视频',
-          onPressed: () {
-            context.read<VideoListProvider>().pickAndEncryptVideos(
-              targetFolder: context.read<FolderProvider>().selectedFolder,
-            );
-          },
+          tooltip: '安全访问添加',
+          onPressed: _pickAndEncryptVideosFullAccess,
         ),
         IconButton(
           icon: const Icon(Icons.cleaning_services_rounded, size: 20),
@@ -269,7 +267,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
                   ),
                   const SizedBox(height: AppSpacing.md),
                   Text(
-                    '点击右下角 + 按钮开始加密',
+                    '点击右上角 + 开始加密',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context)
                           .colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
@@ -350,6 +348,51 @@ class _VideoListScreenState extends State<VideoListScreen> {
   }
 
   // --- 交互逻辑 ---
+
+  /// 完全访问模式：先确保拥有 MANAGE_EXTERNAL_STORAGE 权限，再打开文件选择器
+  ///
+  /// Android scoped storage 下若未授予此权限，FilePicker 会走 SAF 显示"安全访问"，
+  /// 仅能看到媒体库中的视频。授予后直接浏览文件系统（"完全访问"）。
+  Future<void> _pickAndEncryptVideosFullAccess() async {
+    final manageStatus = await Permission.manageExternalStorage.status;
+
+    // 已有完全访问权限，直接选文件
+    if (manageStatus.isGranted) {
+      if (mounted && context.mounted) {
+        context.read<VideoListProvider>().pickAndEncryptVideos(
+          targetFolder: context.read<FolderProvider>().selectedFolder,
+        );
+      }
+      return;
+    }
+
+    // 需要完全访问 — 引导用户去设置页面开启
+    final goSettings = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('需要完全访问权限'),
+        content: const Text(
+          '当前仅「安全访问」模式，只能看到部分视频。\n\n'
+          '请在系统设置中开启「允许管理所有文件」，\n'
+          '获得完全访问权限后可以浏览任意目录下的视频。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('前往设置'),
+          ),
+        ],
+      ),
+    );
+
+    if (goSettings == true) {
+      await openAppSettings();
+    }
+  }
 
   void _showVideoActions(VideoItem video, VideoListProvider videoProvider) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -432,6 +475,15 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
       // 调用 Android 原生打开文件
       await _fileChannel.invokeMethod('openFile', {'path': tempPath});
+    } on PlatformException catch (e) {
+      if (mounted) { Navigator.pop(context); }
+      debugPrint('[SnPlayer] _playExternal PlatformException: code=${e.code}, msg=${e.message}');
+      final errorMsg = _getPlayExternalErrorMsg(e.code, e.message);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorMsg)),
+        );
+      }
     } catch (e) {
       if (mounted) { Navigator.pop(context); }
       debugPrint('[SnPlayer] _playExternal: $e');
@@ -440,6 +492,22 @@ class _VideoListScreenState extends State<VideoListScreen> {
           const SnackBar(content: Text('打开失败，请检查是否安装了播放器')),
         );
       }
+    }
+  }
+
+  /// 将原生错误码转为用户可读的错误提示
+  String _getPlayExternalErrorMsg(String code, String? message) {
+    switch (code) {
+      case 'NO_PLAYER':
+        return '没有找到可播放视频的应用，请安装 MX Player 或 VLC';
+      case 'FILE_NOT_FOUND':
+        return '解密文件不存在，请重试';
+      case 'SECURITY':
+        return '缺少文件访问权限，请在系统设置中开启「允许管理所有文件」';
+      case 'NO_PATH':
+        return '文件路径为空，请联系开发者';
+      default:
+        return '播放失败（$code）${message ?? ""}';
     }
   }
 

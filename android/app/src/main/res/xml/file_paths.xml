@@ -4,4 +4,6 @@
     <external-cache-path name="external_cache" path="." />
     <files-path name="files" path="." />
     <external-files-path name="external_files" path="." />
+    <!-- Download 目录：覆盖 /storage/emulated/0/Download/，用于解密导出（UnLockVideo）的第三方播放 -->
+    <external-path name="download" path="Download/" />
 </paths>

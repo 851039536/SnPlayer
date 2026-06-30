@@ -58,9 +58,17 @@ class VideoListProvider extends ChangeNotifier {
   }
 
   /// 选择并加密视频
+  ///
+  /// 使用 FileType.custom 而非 FileType.video，
+  /// 在拥有 MANAGE_EXTERNAL_STORAGE 时能直接浏览文件系统（完全访问），
+  /// 而非走 SAF 媒体库选择器（安全访问）。
   Future<void> pickAndEncryptVideos({String? targetFolder}) async {
     final result = await FilePicker.pickFiles(
-      type: FileType.video,
+      type: FileType.custom,
+      allowedExtensions: const [
+        'mp4', 'mkv', 'avi', 'mov', 'flv',
+        'wmv', 'webm', 'm4v', '3gp', 'ts',
+      ],
       allowMultiple: true,
     );
 
