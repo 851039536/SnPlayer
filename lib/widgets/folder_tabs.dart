@@ -27,7 +27,7 @@ class FolderTabs extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return SizedBox(
-      height: 48,
+      height: 40,
       child: Row(
         children: [
           Expanded(
@@ -95,11 +95,11 @@ class FolderTabs extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.only(
           right: AppSpacing.md,
-          top: AppSpacing.sm,
-          bottom: AppSpacing.sm,
+          top: AppSpacing.xs,
+          bottom: AppSpacing.xs,
         ),
         padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.xl, vertical: AppSpacing.md),
+          horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
         decoration: BoxDecoration(
           color: isSelected
               ? color.withValues(alpha: 0.2)

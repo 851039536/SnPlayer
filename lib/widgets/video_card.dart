@@ -40,7 +40,7 @@ class VideoCard extends StatelessWidget {
             // 信息区域
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
+                  AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, AppSpacing.xs),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

@@ -280,12 +280,13 @@ class _VideoListScreenState extends State<VideoListScreen> {
         }
 
         return SliverPadding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
+          padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.md),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
-              mainAxisSpacing: AppSpacing.md,
-              crossAxisSpacing: AppSpacing.md,
+              mainAxisSpacing: AppSpacing.sm,
+              crossAxisSpacing: AppSpacing.sm,
               childAspectRatio: 1.0,
             ),
             delegate: SliverChildBuilderDelegate(
@@ -318,9 +319,9 @@ class _VideoListScreenState extends State<VideoListScreen> {
           onTap: _showStorageStats,
           child: Container(
             margin: const EdgeInsets.fromLTRB(
-              AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
+              AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.sm),
             padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.xl, vertical: 10),
+              horizontal: AppSpacing.lg, vertical: AppSpacing.xs),
             decoration: BoxDecoration(
               color: colorScheme.surfaceContainerHigh.withValues(alpha: 0.9),
               borderRadius: BorderRadius.circular(AppRadius.xl),
