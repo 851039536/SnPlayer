@@ -34,14 +34,14 @@ const int ciphertextOffset = 64;
 /// AES-CTR 块大小（固定 16 字节）
 const int aesBlockSize = 16;
 
-/// 缩略图宽度（像素，匹配网格卡片 ~184px 显示宽度）
-const int thumbnailWidth = 192;
+/// 缩略图宽度（像素，匹配网格卡片显示宽度）
+const int thumbnailWidth = 280;
 
 /// 缩略图高度（像素，16:9 比例）
-const int thumbnailHeight = 108;
+const int thumbnailHeight = 158;
 
-/// 缩略图 JPEG 质量（0-100）
-const int thumbnailQuality = 80;
+/// 缩略图 JPEG 质量（0-100，90 平衡清晰度与文件大小）
+const int thumbnailQuality = 90;
 
 /// 缩略图分批加载每批数量
 const int thumbnailBatchSize = 3;

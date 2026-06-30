@@ -6,6 +6,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../config/crypto.dart';
 import 'crypto_service.dart';
+import 'path_provider_service.dart';
 
 /// 缩略图服务
 ///
@@ -131,6 +132,54 @@ class ThumbnailService {
     } catch (e) {
       debugPrint('[SnPlayer] ThumbnailService.decryptThumbnailToCache: $e');
       return null;
+    }
+  }
+
+  /// 从加密视频生成缩略图并保存为 .tenc
+  ///
+  /// 用于处理缺少 .tenc 的第三方 .enc 文件。
+  /// 流程：解密到临时文件 → 提取帧 → 加密为 .tenc → 解密到缓存 → 清理临时文件
+  ///
+  /// 返回磁盘缓存路径，失败返回 null
+  static Future<String?> generateThumbnailFromEncrypted(
+    String encPath,
+    String thumbPath,
+    String cacheDir,
+    String videoId,
+  ) async {
+    String? tempPath;
+    try {
+      // 1. 解密视频到临时文件（放入 play_cache 以便统一清理）
+      final playCacheDir = await PathProviderService.getCacheDir();
+      tempPath = await CryptoService.decryptToTemp(encPath, playCacheDir);
+
+      // 2. 从临时文件提取缩略帧
+      final jpegBytes = await extractThumbnail(tempPath);
+      if (jpegBytes == null) {
+        return null;
+      }
+
+      // 3. 加密 JPEG 数据并写入 .tenc 文件
+      final encrypted = await CryptoService.encryptBytes(jpegBytes);
+      final thumbFile = File(thumbPath);
+      await thumbFile.parent.create(recursive: true);
+      await thumbFile.writeAsBytes(encrypted);
+
+      // 4. 解密到磁盘缓存供 UI 显示
+      final cachePath = await decryptThumbnailToCache(videoId, thumbPath, cacheDir);
+      return cachePath;
+    } catch (e) {
+      debugPrint('[SnPlayer] ThumbnailService.generateThumbnailFromEncrypted: $e');
+      return null;
+    } finally {
+      // 5. 删除临时解密文件
+      if (tempPath != null) {
+        try {
+          await File(tempPath).delete();
+        } catch (e) {
+          debugPrint('[SnPlayer] ThumbnailService.generateThumbnailFromEncrypted cleanup: $e');
+        }
+      }
     }
   }
 

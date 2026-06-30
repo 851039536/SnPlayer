@@ -22,8 +22,25 @@ class VideoListProvider extends ChangeNotifier {
   final Map<String, String> _processingState = {}; // id -> status text
   final CancellationToken _thumbnailToken = CancellationToken();
 
+  /// 后台缩略图生成队列
+  final List<VideoItem> _missingThumbnails = [];
+  bool _isBackgroundGenRunning = false;
+  int _missingThumbnailTotal = 0;
+  int _missingThumbnailProcessed = 0;
+
+  // --- 公开 getters ---
+
   List<VideoItem> get videos => _videos;
   Map<String, String> get processingState => _processingState;
+
+  /// 是否正在后台生成缩略图
+  bool get isGeneratingThumbnails => _isBackgroundGenRunning;
+
+  /// 后台生成进度：当前处理数
+  int get missingThumbnailProcessed => _missingThumbnailProcessed;
+
+  /// 后台生成进度：总数
+  int get missingThumbnailTotal => _missingThumbnailTotal;
 
   /// 加载视频列表并扫描文件
   Future<void> loadVideos() async {
@@ -178,6 +195,11 @@ class VideoListProvider extends ChangeNotifier {
               ThumbnailService.decryptThumbnailToCache(video.id, video.thumbPath, cacheDir),
               Future.delayed(const Duration(seconds: 10), () => null),
             ]);
+
+            // 收集缺失 .tenc 的视频，稍后后台逐条生成
+            if (video.thumbCachePath == null && !await File(video.thumbPath).exists()) {
+              _missingThumbnails.add(video);
+            }
           } catch (e) {
             debugPrint('[SnPlayer] VideoListProvider.loadThumbnails: $e');
           }
@@ -189,11 +211,17 @@ class VideoListProvider extends ChangeNotifier {
       // 让出主线程给 UI 渲染
       await Future.delayed(Duration.zero);
     }
+
+    // 启动后台队列逐条生成缺失缩略图（不阻塞 UI）
+    if (_missingThumbnails.isNotEmpty) {
+      unawaited(_startBackgroundGeneration(cacheDir));
+    }
   }
 
-  /// 取消缩略图加载
+  /// 取消缩略图加载（含后台生成队列）
   void cancelThumbnailLoading() {
     _thumbnailToken.cancel();
+    _missingThumbnails.clear();
   }
 
   /// 按可见范围加载缩略图（可视区懒加载）
@@ -225,6 +253,48 @@ class VideoListProvider extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  /// 后台逐条生成缺失的缩略图（不阻塞 UI）
+  ///
+  /// 在 [loadThumbnails] 完成后自动调用。
+  /// 每条处理完通知 UI 刷新，间隔 300ms 让出主线程。
+  Future<void> _startBackgroundGeneration(String cacheDir) async {
+    if (_isBackgroundGenRunning) { return; }
+    _isBackgroundGenRunning = true;
+    _missingThumbnailTotal = _missingThumbnails.length;
+    _missingThumbnailProcessed = 0;
+    notifyListeners();
+
+    try {
+      // 逐条处理，避免同时解密多个大文件
+      for (final video in _missingThumbnails) {
+        if (_thumbnailToken.isCancelled) { break; }
+
+        _missingThumbnailProcessed++;
+        notifyListeners();
+
+        try {
+          video.thumbCachePath = await ThumbnailService.generateThumbnailFromEncrypted(
+            video.encPath, video.thumbPath, cacheDir, video.id,
+          );
+          if (video.thumbCachePath != null) {
+            notifyListeners(); // 立即刷新该卡片的缩略图
+          }
+        } catch (e) {
+          debugPrint('[SnPlayer] VideoListProvider._startBackgroundGeneration: $e');
+        }
+
+        // 间隔让出主线程，保持 UI 流畅
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+    } finally {
+      _missingThumbnails.clear();
+      _isBackgroundGenRunning = false;
+      _missingThumbnailTotal = 0;
+      _missingThumbnailProcessed = 0;
+      notifyListeners();
+    }
   }
 
   // --- 存储统计 ---
