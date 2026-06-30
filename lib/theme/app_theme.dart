@@ -58,7 +58,7 @@ class AppTheme {
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: colorScheme.outlineVariant.withOpacity(0.5)),
+          side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.5)),
         ),
         margin: EdgeInsets.zero,
       ),
@@ -81,7 +81,7 @@ class AppTheme {
       colorScheme: colorScheme,
       useMaterial3: true,
 
-      appBarTheme: AppBarTheme(
+      appBarTheme: const AppBarTheme(
         centerTitle: false,
         elevation: 0,
       ),
@@ -90,7 +90,7 @@ class AppTheme {
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: colorScheme.outlineVariant.withOpacity(0.3)),
+          side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.3)),
         ),
         margin: EdgeInsets.zero,
       ),

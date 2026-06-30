@@ -5,7 +5,6 @@ import '../models/video_item.dart';
 import '../providers/video_list_provider.dart';
 import '../providers/folder_provider.dart';
 import '../services/permission_service.dart';
-import '../services/storage_service.dart';
 import '../utils/file_utils.dart';
 import '../widgets/video_card.dart';
 import '../widgets/folder_tabs.dart';
@@ -31,10 +30,44 @@ class _VideoListScreenState extends State<VideoListScreen> {
   bool _hasPermission = false;
   bool _isInitializing = true;
 
+  final ScrollController _scrollController = ScrollController();
+  static const int _preloadRows = 2; // 上下各预加载 2 行
+
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     _initApp();
+  }
+
+  void _onScroll() {
+    final provider = context.read<VideoListProvider>();
+    final videos = provider.videos;
+    if (videos.isEmpty) { return; }
+
+    final crossAxisCount = 2;
+    // 估算每项高度：网格宽度 / 列数 * aspectRatio
+    final screenWidth = MediaQuery.of(context).size.width;
+    final padding = AppSpacing.lg * 2; // grid padding left+right
+    final spacing = AppSpacing.md * (crossAxisCount - 1);
+    final itemWidth = (screenWidth - padding - spacing) / crossAxisCount;
+    final itemHeight = itemWidth; // childAspectRatio: 1.0
+
+    final scrollOffset = _scrollController.offset;
+    final viewportHeight = _scrollController.position.viewportDimension;
+
+    // 计算可见范围（含预加载行）
+    final itemsPerRow = crossAxisCount;
+    final rowHeight = itemHeight + AppSpacing.md; // 含 mainAxisSpacing
+    final firstVisibleRow = (scrollOffset / rowHeight).floor();
+    final visibleRows = (viewportHeight / rowHeight).ceil() + 1; // +1 容错
+
+    final firstVisible = ((firstVisibleRow - _preloadRows).clamp(0, double.infinity) * itemsPerRow).toInt();
+    final lastVisible = ((firstVisibleRow + visibleRows + _preloadRows) * itemsPerRow).toInt().clamp(0, videos.length);
+
+    if (firstVisible < lastVisible) {
+      provider.loadVisibleThumbnails(firstVisible, lastVisible);
+    }
   }
 
   Future<void> _initApp() async {
@@ -56,6 +89,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
     await folderProvider.loadFolders();
     await videoProvider.loadVideos();
     videoProvider.loadThumbnails();
+    videoProvider.cleanupExpiredThumbnails(); // 启动时清理过期缓存
 
     if (mounted) {
       setState(() { _isInitializing = false; });
@@ -64,6 +98,8 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     context.read<VideoListProvider>().cancelThumbnailLoading();
     super.dispose();
   }
@@ -134,6 +170,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
           await context.read<VideoListProvider>().loadVideos();
         },
         child: CustomScrollView(
+          controller: _scrollController,
           slivers: [
             // 文件夹标签栏
             SliverToBoxAdapter(child: _buildFolderTabs()),

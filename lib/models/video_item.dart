@@ -1,4 +1,5 @@
 
+
 import 'package:flutter/foundation.dart';
 
 import '../utils/file_utils.dart';
@@ -26,8 +27,9 @@ class VideoItem {
   /// 加密时间
   DateTime encryptedAt;
 
-  /// 缩略图数据（解密后的 JPEG 字节，加载后缓存）
-  Uint8List? coverData;
+  /// 磁盘缓存缩略图路径（thumb_cache/ 下的 JPEG 文件路径）
+  /// null 表示尚未加载
+  String? thumbCachePath;
 
   VideoItem({
     required this.id,
@@ -37,7 +39,7 @@ class VideoItem {
     this.folderName,
     required this.fileSize,
     required this.encryptedAt,
-    this.coverData,
+    this.thumbCachePath,
   });
 
   /// 从文件名解析加密时间

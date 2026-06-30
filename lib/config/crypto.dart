@@ -34,11 +34,11 @@ const int ciphertextOffset = 64;
 /// AES-CTR 块大小（固定 16 字节）
 const int aesBlockSize = 16;
 
-/// 缩略图宽度（像素）
-const int thumbnailWidth = 280;
+/// 缩略图宽度（像素，匹配网格卡片 ~184px 显示宽度）
+const int thumbnailWidth = 192;
 
-/// 缩略图高度（像素）
-const int thumbnailHeight = 150;
+/// 缩略图高度（像素，16:9 比例）
+const int thumbnailHeight = 108;
 
 /// 缩略图 JPEG 质量（0-100）
 const int thumbnailQuality = 80;
@@ -63,6 +63,12 @@ const String unlockVideoDirName = 'MewTool/UnLockVideo';
 
 /// 播放缓存目录（相对应用缓存）
 const String playCacheDirName = 'play_cache';
+
+/// 缩略图磁盘缓存目录（相对应用缓存）
+const String thumbCacheDirName = 'thumb_cache';
+
+/// 缩略图缓存过期天数
+const int thumbCacheExpireDays = 7;
 
 /// 文件夹元数据文件名
 const String foldersJsonFileName = '.folders.json';

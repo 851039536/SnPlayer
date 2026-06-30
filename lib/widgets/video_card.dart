@@ -1,12 +1,17 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/video_item.dart';
+import '../config/crypto.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
 
 /// 视频卡片组件
 ///
 /// 展示缩略图 + 标题 + 文件大小 + 处理状态
+/// 使用 Image.file + cacheWidth/cacheHeight 替代 Image.memory，
+/// 缩略图由 Flutter 内置 ImageCache 管理内存（LRU 淘汰）
 class VideoCard extends StatelessWidget {
   final VideoItem video;
   final String? processingState;
@@ -108,11 +113,13 @@ class VideoCard extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // 缩略图或占位符
-          if (video.coverData != null)
-            Image.memory(
-              video.coverData!,
+          // 磁盘缓存缩略图或占位符
+          if (video.thumbCachePath != null && File(video.thumbCachePath!).existsSync())
+            Image.file(
+              File(video.thumbCachePath!),
               fit: BoxFit.cover,
+              cacheWidth: thumbnailWidth,
+              cacheHeight: thumbnailHeight,
               errorBuilder: (_, __, ___) => _buildPlaceholder(colorScheme),
             )
           else

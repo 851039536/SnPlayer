@@ -106,4 +106,61 @@ class ThumbnailService {
       return false;
     }
   }
+
+  /// 解密缩略图到磁盘缓存文件
+  ///
+  /// 从 .tenc 解密并写入 thumb_cache/{videoId}.jpg，
+  /// 返回缓存文件路径。若缓存已存在直接返回。
+  static Future<String?> decryptThumbnailToCache(String videoId, String thumbPath, String cacheDir) async {
+    try {
+      final cacheFile = File('$cacheDir/$videoId.jpg');
+
+      // 缓存命中直接返回
+      if (await cacheFile.exists()) {
+        return cacheFile.path;
+      }
+
+      final decrypted = await loadThumbnail(thumbPath);
+      if (decrypted == null) {
+        return null;
+      }
+
+      await cacheFile.parent.create(recursive: true);
+      await cacheFile.writeAsBytes(decrypted);
+      return cacheFile.path;
+    } catch (e) {
+      debugPrint('[SnPlayer] ThumbnailService.decryptThumbnailToCache: $e');
+      return null;
+    }
+  }
+
+  /// 清理过期的磁盘缓存文件
+  ///
+  /// 删除 thumb_cache/ 中超过 [maxAge] 天未修改的文件
+  static Future<int> cleanupExpiredCache(String cacheDir, {int maxAgeDays = thumbCacheExpireDays}) async {
+    final dir = Directory(cacheDir);
+    if (!await dir.exists()) {
+      return 0;
+    }
+
+    int deleted = 0;
+    final now = DateTime.now();
+    final maxAge = Duration(days: maxAgeDays);
+
+    await for (final entity in dir.list()) {
+      if (entity is File) {
+        try {
+          final stat = await entity.stat();
+          if (now.difference(stat.modified) > maxAge) {
+            await entity.delete();
+            deleted++;
+          }
+        } catch (e) {
+          debugPrint('[SnPlayer] ThumbnailService.cleanupExpiredCache: $e');
+        }
+      }
+    }
+
+    return deleted;
+  }
 }

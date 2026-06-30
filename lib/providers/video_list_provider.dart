@@ -123,6 +123,14 @@ class VideoListProvider extends ChangeNotifier {
   Future<bool> deleteVideo(VideoItem video) async {
     final success = await SafeDeleteHelper.safeDeleteVideo(video);
     if (success) {
+      // 同步清理磁盘缓存缩略图
+      if (video.thumbCachePath != null) {
+        try {
+          await File(video.thumbCachePath!).delete();
+        } catch (_) {
+          // 文件可能已被清理，忽略
+        }
+      }
       _videos.removeWhere((v) => v.id == video.id);
       notifyListeners();
     }
@@ -150,29 +158,28 @@ class VideoListProvider extends ChangeNotifier {
     return success;
   }
 
-  /// 分批加载缩略图（不阻塞 UI）
+  /// 分批加载缩略图到磁盘缓存（不阻塞 UI）
   Future<void> loadThumbnails() async {
     _thumbnailToken.reset();
 
-    final videosWithoutCover = _videos.where((v) => v.coverData == null).toList();
+    final cacheDir = await PathProviderService.getThumbCacheDir();
+    final videosWithoutCache = _videos.where((v) => v.thumbCachePath == null).toList();
 
-    for (int i = 0; i < videosWithoutCover.length; i += thumbnailBatchSize) {
+    for (int i = 0; i < videosWithoutCache.length; i += thumbnailBatchSize) {
       if (_thumbnailToken.isCancelled) { break; }
 
-      final end = (i + thumbnailBatchSize).clamp(0, videosWithoutCover.length);
-      final batch = videosWithoutCover.sublist(i, end);
+      final end = (i + thumbnailBatchSize).clamp(0, videosWithoutCache.length);
+      final batch = videosWithoutCache.sublist(i, end);
 
       await Future.wait(
         batch.map((video) async {
           try {
-            // 单个缩略图加载添加 10 秒超时，防止磁盘 I/O 阻塞
-            video.coverData = await Future.any([
-              ThumbnailService.loadThumbnail(video.thumbPath),
+            video.thumbCachePath = await Future.any([
+              ThumbnailService.decryptThumbnailToCache(video.id, video.thumbPath, cacheDir),
               Future.delayed(const Duration(seconds: 10), () => null),
             ]);
           } catch (e) {
             debugPrint('[SnPlayer] VideoListProvider.loadThumbnails: $e');
-            video.coverData = null;
           }
         }),
       );
@@ -187,6 +194,37 @@ class VideoListProvider extends ChangeNotifier {
   /// 取消缩略图加载
   void cancelThumbnailLoading() {
     _thumbnailToken.cancel();
+  }
+
+  /// 按可见范围加载缩略图（可视区懒加载）
+  ///
+  /// 仅加载 [startIndex] 到 [endIndex] 范围内尚未缓存的视频缩略图，
+  /// Flutter 内置 ImageCache 负责离屏缩略图的 LRU 淘汰
+  Future<void> loadVisibleThumbnails(int startIndex, int endIndex) async {
+    final cacheDir = await PathProviderService.getThumbCacheDir();
+    final range = endIndex.clamp(0, _videos.length);
+
+    for (int i = startIndex; i < range; i++) {
+      if (_thumbnailToken.isCancelled) { break; }
+      final video = _videos[i];
+      if (video.thumbCachePath != null) { continue; }
+
+      try {
+        video.thumbCachePath = await Future.any([
+          ThumbnailService.decryptThumbnailToCache(video.id, video.thumbPath, cacheDir),
+          Future.delayed(const Duration(seconds: 5), () => null),
+        ]);
+      } catch (e) {
+        debugPrint('[SnPlayer] VideoListProvider.loadVisibleThumbnails: $e');
+      }
+
+      if (i % thumbnailBatchSize == 0) {
+        notifyListeners();
+        await Future.delayed(Duration.zero);
+      }
+    }
+
+    notifyListeners();
   }
 
   // --- 存储统计 ---
@@ -208,6 +246,18 @@ class VideoListProvider extends ChangeNotifier {
   /// 清理孤儿缩略图
   Future<int> cleanOrphanThumbnails() async {
     return await StorageService.cleanOrphanThumbnails();
+  }
+
+  /// 清理过期的磁盘缓存缩略图
+  Future<int> cleanupExpiredThumbnails() async {
+    final cacheDir = await PathProviderService.getThumbCacheDir();
+    return await ThumbnailService.cleanupExpiredCache(cacheDir);
+  }
+
+  /// 清理过期的磁盘缓存缩略图
+  Future<int> cleanExpiredThumbnails() async {
+    final cacheDir = await PathProviderService.getThumbCacheDir();
+    return await ThumbnailService.cleanupExpiredCache(cacheDir);
   }
 
   // --- 内部方法 ---

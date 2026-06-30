@@ -52,4 +52,10 @@ class PathProviderService {
     _cacheDir = p.join(appCache.path, playCacheDirName);
     return _cacheDir!;
   }
+
+  /// 获取缩略图磁盘缓存目录
+  static Future<String> getThumbCacheDir() async {
+    final appCache = await getTemporaryDirectory();
+    return p.join(appCache.path, thumbCacheDirName);
+  }
 }
