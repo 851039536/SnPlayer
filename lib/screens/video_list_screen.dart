@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -88,12 +90,13 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
     await folderProvider.loadFolders();
     await videoProvider.loadVideos();
-    await videoProvider.loadThumbnails(); // 等待缩略图加载完毕再渲染
-    videoProvider.cleanupExpiredThumbnails(); // 后台清理过期缓存
 
+    // 先展示网格（含占位图），缩略图后台异步加载
     if (mounted) {
       setState(() { _isInitializing = false; });
     }
+    unawaited(videoProvider.loadThumbnails());
+    videoProvider.cleanupExpiredThumbnails(); // 后台清理过期缓存
   }
 
   @override

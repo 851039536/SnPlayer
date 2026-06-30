@@ -40,8 +40,8 @@ const int thumbnailWidth = 480;
 /// 缩略图高度（像素，16:9 比例）
 const int thumbnailHeight = 270;
 
-/// 缩略图 JPEG 质量（0-100，95 接近无损，保障画面清晰度）
-const int thumbnailQuality = 95;
+/// 缩略图 JPEG 质量（0-100，60 在 480×270 分辨率下与 95 肉眼无差异，文件体积缩减约 60%）
+const int thumbnailQuality = 60;
 
 /// 部分解密提取缩略图的最大字节数（30MB）
 ///
@@ -50,7 +50,7 @@ const int thumbnailQuality = 95;
 const int partialDecryptMaxBytes = 30 * 1024 * 1024;
 
 /// 缩略图分批加载每批数量
-const int thumbnailBatchSize = 3;
+const int thumbnailBatchSize = 8;
 
 /// 播放临时文件自动删除延迟（毫秒）
 const int playCacheDeleteDelayMs = 30000;

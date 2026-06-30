@@ -114,7 +114,9 @@ class VideoCard extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           // 磁盘缓存缩略图或占位符
-          if (video.thumbCachePath != null && File(video.thumbCachePath!).existsSync())
+          // 纯内存判断 thumbCachePath != null，避免同步 I/O
+          // errorBuilder 兜底：缓存文件被意外清理时回退占位图
+          if (video.thumbCachePath != null)
             Image.file(
               File(video.thumbCachePath!),
               fit: BoxFit.cover,

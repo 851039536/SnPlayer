@@ -151,6 +151,7 @@ class VideoListProvider extends ChangeNotifier {
           // 文件可能已被清理，忽略
         }
       }
+      video.thumbCachePath = null;
       _videos.removeWhere((v) => v.id == video.id);
       notifyListeners();
     }
@@ -196,7 +197,7 @@ class VideoListProvider extends ChangeNotifier {
           try {
             video.thumbCachePath = await Future.any([
               ThumbnailService.decryptThumbnailToCache(video.id, video.thumbPath, cacheDir),
-              Future.delayed(const Duration(seconds: 10), () => null),
+              Future.delayed(const Duration(seconds: 5), () => null),
             ]);
 
             // 收集缺失 .tenc 的视频，稍后后台逐条生成
@@ -261,51 +262,69 @@ class VideoListProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 后台逐条生成缺失的缩略图（不阻塞 UI）
+  /// 后台并发生成缺失的缩略图（不阻塞 UI）
   ///
   /// 在 [loadThumbnails] 完成后自动调用。
-  /// 每条处理完通知 UI 刷新，间隔 300ms 让出主线程。
+  /// 使用 2 并发 worker 池竞争消费队列，每条完成后立即通知 UI 刷新。
   Future<void> _startBackgroundGeneration(String cacheDir) async {
     if (_isBackgroundGenRunning) { return; }
     _isBackgroundGenRunning = true;
     _missingThumbnailTotal = _missingThumbnails.length;
     _missingThumbnailProcessed = 0;
-    debugPrint('[SnPlayer] VideoListProvider: 后台开始生成 $_missingThumbnailTotal 张缺失缩略图');
+    debugPrint('[SnPlayer] VideoListProvider: 后台并发生成 $_missingThumbnailTotal 张缺失缩略图（2并发池）');
     notifyListeners();
 
-    try {
-      // 逐条处理，避免同时解密多个大文件
-      for (final video in _missingThumbnails) {
-        if (_thumbnailToken.isCancelled) { break; }
+    final queue = List<VideoItem>.from(_missingThumbnails);
+    int nextIndex = 0;
+    int completedCount = 0;
 
-        _missingThumbnailProcessed++;
-        final shortId = video.id.length > 8 ? video.id.substring(0, 8) : video.id;
-        debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 $_missingThumbnailProcessed/$_missingThumbnailTotal [$shortId]');
-        notifyListeners();
+    Future<void> processVideo(VideoItem video) async {
+      final shortId = video.id.length > 8 ? video.id.substring(0, 8) : video.id;
+      debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId]');
 
-        try {
-          video.thumbCachePath = await ThumbnailService.generateThumbnailFromEncryptedPartial(
-            video.encPath, video.thumbPath, cacheDir, video.id,
-          );
-          if (video.thumbCachePath != null) {
-            debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成成功');
-            notifyListeners(); // 立即刷新该卡片的缩略图
-          } else {
-            debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成失败（返回null）');
-          }
-        } catch (e) {
-          debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 异常: $e');
+      try {
+        video.thumbCachePath = await ThumbnailService.generateThumbnailFromEncryptedPartial(
+          video.encPath, video.thumbPath, cacheDir, video.id,
+        );
+        if (video.thumbCachePath != null) {
+          debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成成功');
+        } else {
+          debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成失败（返回null）');
         }
-
-        // 间隔让出主线程，保持 UI 流畅
-        await Future.delayed(const Duration(milliseconds: 300));
+      } catch (e) {
+        debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 异常: $e');
       }
+
+      completedCount++;
+      _missingThumbnailProcessed = completedCount;
+      notifyListeners();
+
+      // 让出主线程给 UI 刷新
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
+    Future<void> worker() async {
+      while (true) {
+        if (_thumbnailToken.isCancelled) { break; }
+        final int idx = nextIndex;
+        if (idx >= queue.length) { break; }
+        nextIndex++;
+        await processVideo(queue[idx]);
+      }
+    }
+
+    try {
+      // 启动 2 个并发 worker 竞争消费同一个队列
+      await Future.wait([
+        worker(),
+        worker(),
+      ]);
     } finally {
       _missingThumbnails.clear();
       _isBackgroundGenRunning = false;
       _missingThumbnailTotal = 0;
       _missingThumbnailProcessed = 0;
-      debugPrint('[SnPlayer] VideoListProvider: 后台缩略图生成队列完成');
+      debugPrint('[SnPlayer] VideoListProvider: 后台缩略图生成队列完成（共 $completedCount 张）');
       notifyListeners();
     }
   }
