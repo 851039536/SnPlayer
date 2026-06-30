@@ -80,7 +80,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   // --- 手势回调 ---
 
   void _onGestureTap() {
-    if (_controller != null && _controller!.value.isPlaying) {
+    if (_controller == null) { return; }
+    if (_controller!.value.isPlaying) {
       _controller!.pause();
     } else {
       _controller!.play();

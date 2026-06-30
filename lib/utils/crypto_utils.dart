@@ -13,12 +13,13 @@ import '../config/crypto.dart';
 
 /// 加密工具函数（纯 Dart，无 Flutter/Isolate 依赖，可安全被 Isolate 和主线程共用）
 class CryptoUtils {
+  static final _secureRandom = Random.secure();
+
   /// 生成加密安全的随机字节
   static Uint8List generateRandomBytes(int length) {
-    final random = Random.secure();
     final bytes = Uint8List(length);
     for (int i = 0; i < length; i++) {
-      bytes[i] = random.nextInt(256);
+      bytes[i] = _secureRandom.nextInt(256);
     }
     return bytes;
   }

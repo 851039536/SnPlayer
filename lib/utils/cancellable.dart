@@ -1,11 +1,9 @@
-import 'dart:async';
-
 /// 可取消操作令牌
 ///
 /// 用于取消正在进行的加密/解密/缩略图加载等耗时操作
 class CancellationToken {
   bool _isCancelled = false;
-  final List<Future<void> Function()> _onCancelCallbacks = [];
+  final List<void Function()> _onCancelCallbacks = [];
 
   /// 是否已取消
   bool get isCancelled => _isCancelled;
@@ -19,7 +17,7 @@ class CancellationToken {
   }
 
   /// 注册取消回调
-  void onCancel(Future<void> Function() callback) {
+  void onCancel(void Function() callback) {
     _onCancelCallbacks.add(callback);
   }
 

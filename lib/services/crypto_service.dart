@@ -71,11 +71,55 @@ class CryptoService {
   /// Isolate 最大运行时间（5 分钟），超时后强制终止
   static const Duration _isolateTimeout = Duration(minutes: 5);
 
+  /// 部分解密超时（30 秒），30MB 部分解密通常 1-3 秒内完成
+  static const Duration _partialTimeout = Duration(seconds: 30);
+
   /// 在后台 Isolate 中执行加解密，通过 SendPort 接收进度事件
   static Future<void> _runInIsolate({
     required String command,
     required String inputPath,
     required String outputPath,
+    void Function(double)? onProgress,
+  }) async {
+    await _spawnAndManageIsolate(
+      message: {
+        'command': command,
+        'inputPath': inputPath,
+        'outputPath': outputPath,
+        'password': defaultPassword,
+      },
+      timeout: _isolateTimeout,
+      onProgress: onProgress,
+    );
+  }
+
+  /// 在后台 Isolate 中执行部分解密，通过 SendPort 接收进度事件
+  ///
+  /// 与 [_runInIsolate] 共享相同的 Isolate 生命周期管理，额外传递 [maxBytes] 参数。
+  static Future<void> _runPartialInIsolate({
+    required String command,
+    required String inputPath,
+    required String outputPath,
+    required int maxBytes,
+  }) async {
+    await _spawnAndManageIsolate(
+      message: {
+        'command': command,
+        'inputPath': inputPath,
+        'outputPath': outputPath,
+        'password': defaultPassword,
+        'maxBytes': maxBytes,
+      },
+      timeout: _partialTimeout,
+    );
+  }
+
+  /// Isolate 生命周期管理公共方法
+  ///
+  /// 负责 Isolate 的 spawn/通信/超时/优雅关闭，具体消息内容由调用方组装。
+  static Future<void> _spawnAndManageIsolate({
+    required Map<String, dynamic> message,
+    required Duration timeout,
     void Function(double)? onProgress,
   }) async {
     final completer = Completer<void>();
@@ -102,30 +146,24 @@ class CryptoService {
             completer.complete();
           }
         } else if (type == 'error') {
-          final message = event['message'] as String? ?? 'Unknown error';
+          final msg = event['message'] as String? ?? 'Unknown error';
           if (!completer.isCompleted) {
-            completer.completeError(Exception(message));
+            completer.completeError(Exception(msg));
           }
         }
       }
     });
 
     try {
-      workerSendPort.send({
-        'command': command,
-        'inputPath': inputPath,
-        'outputPath': outputPath,
-        'password': defaultPassword,
-        'progressPort': progressPort.sendPort,
-      });
+      message['progressPort'] = progressPort.sendPort;
+      workerSendPort.send(message);
 
-      // 添加超时机制，防止 worker 崩溃后永久挂起
-      await completer.future.timeout(_isolateTimeout, onTimeout: () {
+      await completer.future.timeout(timeout, onTimeout: () {
         throw TimeoutException(
-            'Isolate $command 操作超时 (${_isolateTimeout.inSeconds}s): $inputPath');
+            'Isolate ${message['command']} 操作超时 (${timeout.inSeconds}s): ${message['inputPath']}');
       });
     } catch (e) {
-      debugPrint('[SnPlayer] CryptoService._runInIsolate: $e');
+      debugPrint('[SnPlayer] CryptoService._spawnAndManageIsolate: $e');
       rethrow;
     } finally {
       progressPort.close();
@@ -135,71 +173,7 @@ class CryptoService {
         isolate.kill(priority: Isolate.beforeNextEvent);
       } catch (e) {
         debugPrint(
-            '[SnPlayer] CryptoService._runInIsolate: Isolate.kill failed $e');
-        isolate.kill(priority: Isolate.immediate);
-      }
-    }
-  }
-
-  /// 在后台 Isolate 中执行部分解密，通过 SendPort 接收进度事件
-  ///
-  /// 与 [_runInIsolate] 共享相同的 Isolate 生命周期管理，额外传递 [maxBytes] 参数。
-  static Future<void> _runPartialInIsolate({
-    required String command,
-    required String inputPath,
-    required String outputPath,
-    required int maxBytes,
-  }) async {
-    final completer = Completer<void>();
-
-    final receivePort = ReceivePort();
-    final isolate = await Isolate.spawn(cryptoWorker, receivePort.sendPort);
-
-    final workerSendPort = await receivePort.first as SendPort;
-
-    final progressPort = ReceivePort();
-    progressPort.listen((event) {
-      if (event is Map) {
-        final type = event['type'] as String?;
-        if (type == 'done') {
-          if (!completer.isCompleted) {
-            completer.complete();
-          }
-        } else if (type == 'error') {
-          final message = event['message'] as String? ?? 'Unknown error';
-          if (!completer.isCompleted) {
-            completer.completeError(Exception(message));
-          }
-        }
-      }
-    });
-
-    try {
-      workerSendPort.send({
-        'command': command,
-        'inputPath': inputPath,
-        'outputPath': outputPath,
-        'password': defaultPassword,
-        'progressPort': progressPort.sendPort,
-        'maxBytes': maxBytes,
-      });
-
-      // 30MB 部分解密通常在 1-3 秒内完成，30 秒超时留足余量
-      await completer.future.timeout(const Duration(seconds: 30), onTimeout: () {
-        throw TimeoutException(
-            'Isolate $command 操作超时 (30s): $inputPath');
-      });
-    } catch (e) {
-      debugPrint('[SnPlayer] CryptoService._runPartialInIsolate: $e');
-      rethrow;
-    } finally {
-      progressPort.close();
-      receivePort.close();
-      try {
-        isolate.kill(priority: Isolate.beforeNextEvent);
-      } catch (e) {
-        debugPrint(
-            '[SnPlayer] CryptoService._runPartialInIsolate: Isolate.kill failed $e');
+            '[SnPlayer] CryptoService._spawnAndManageIsolate: Isolate.kill failed $e');
         isolate.kill(priority: Isolate.immediate);
       }
     }

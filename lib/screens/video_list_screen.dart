@@ -96,7 +96,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
       setState(() { _isInitializing = false; });
     }
     unawaited(videoProvider.loadThumbnails());
-    videoProvider.cleanupExpiredThumbnails(); // 后台清理过期缓存
+    unawaited(videoProvider.cleanupExpiredThumbnails()); // 后台清理过期缓存
   }
 
   @override

@@ -262,63 +262,48 @@ class VideoListProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 后台并发生成缺失的缩略图（不阻塞 UI）
+  /// 后台生成缺失的缩略图（不阻塞 UI）
   ///
   /// 在 [loadThumbnails] 完成后自动调用。
-  /// 使用 2 并发 worker 池竞争消费队列，每条完成后立即通知 UI 刷新。
+  /// 逐条处理队列，每条完成后立即通知 UI 刷新。
   Future<void> _startBackgroundGeneration(String cacheDir) async {
     if (_isBackgroundGenRunning) { return; }
     _isBackgroundGenRunning = true;
     _missingThumbnailTotal = _missingThumbnails.length;
     _missingThumbnailProcessed = 0;
-    debugPrint('[SnPlayer] VideoListProvider: 后台并发生成 $_missingThumbnailTotal 张缺失缩略图（2并发池）');
+    debugPrint('[SnPlayer] VideoListProvider: 后台生成 $_missingThumbnailTotal 张缺失缩略图');
     notifyListeners();
 
     final queue = List<VideoItem>.from(_missingThumbnails);
-    int nextIndex = 0;
     int completedCount = 0;
 
-    Future<void> processVideo(VideoItem video) async {
-      final shortId = video.id.length > 8 ? video.id.substring(0, 8) : video.id;
-      debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId]');
-
-      try {
-        video.thumbCachePath = await ThumbnailService.generateThumbnailFromEncryptedPartial(
-          video.encPath, video.thumbPath, cacheDir, video.id,
-        );
-        if (video.thumbCachePath != null) {
-          debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成成功');
-        } else {
-          debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成失败（返回null）');
-        }
-      } catch (e) {
-        debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 异常: $e');
-      }
-
-      completedCount++;
-      _missingThumbnailProcessed = completedCount;
-      notifyListeners();
-
-      // 让出主线程给 UI 刷新
-      await Future.delayed(const Duration(milliseconds: 50));
-    }
-
-    Future<void> worker() async {
-      while (true) {
-        if (_thumbnailToken.isCancelled) { break; }
-        final int idx = nextIndex;
-        if (idx >= queue.length) { break; }
-        nextIndex++;
-        await processVideo(queue[idx]);
-      }
-    }
-
     try {
-      // 启动 2 个并发 worker 竞争消费同一个队列
-      await Future.wait([
-        worker(),
-        worker(),
-      ]);
+      for (final video in queue) {
+        if (_thumbnailToken.isCancelled) { break; }
+
+        final shortId = video.id.length > 8 ? video.id.substring(0, 8) : video.id;
+        debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId]');
+
+        try {
+          video.thumbCachePath = await ThumbnailService.generateThumbnailFromEncryptedPartial(
+            video.encPath, video.thumbPath, cacheDir, video.id,
+          );
+          if (video.thumbCachePath != null) {
+            debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成成功');
+          } else {
+            debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 生成失败（返回null）');
+          }
+        } catch (e) {
+          debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 异常: $e');
+        }
+
+        completedCount++;
+        _missingThumbnailProcessed = completedCount;
+        notifyListeners();
+
+        // 让出主线程给 UI 刷新
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
     } finally {
       _missingThumbnails.clear();
       _isBackgroundGenRunning = false;
@@ -352,12 +337,6 @@ class VideoListProvider extends ChangeNotifier {
 
   /// 清理过期的磁盘缓存缩略图
   Future<int> cleanupExpiredThumbnails() async {
-    final cacheDir = await PathProviderService.getThumbCacheDir();
-    return await ThumbnailService.cleanupExpiredCache(cacheDir);
-  }
-
-  /// 清理过期的磁盘缓存缩略图
-  Future<int> cleanExpiredThumbnails() async {
     final cacheDir = await PathProviderService.getThumbCacheDir();
     return await ThumbnailService.cleanupExpiredCache(cacheDir);
   }

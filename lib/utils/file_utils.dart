@@ -4,6 +4,8 @@ import 'package:path/path.dart' as p;
 
 /// 文件工具函数
 class FileUtils {
+  static const _invalidChars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
   /// 生成去重文件名
   ///
   /// video.mp4 → video(1).mp4 → video(2).mp4 ...
@@ -48,9 +50,8 @@ class FileUtils {
 
   /// 过滤文件名中的非法字符
   static String sanitizeFileName(String name) {
-    const invalidChars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
     String result = name;
-    for (final c in invalidChars) {
+    for (final c in _invalidChars) {
       result = result.replaceAll(c, '_');
     }
     return result.trim();
