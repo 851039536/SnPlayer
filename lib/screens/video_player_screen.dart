@@ -9,10 +9,13 @@ import '../services/safe_delete_helper.dart';
 import '../services/path_provider_service.dart';
 import '../config/crypto.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/player/player_gesture.dart';
+import '../widgets/player/player_controls.dart';
 
 /// 视频播放页面
 ///
-/// 内置播放器，解密到临时缓存后播放，退出时 30s 自动清理
+/// 内置播放器，解密到临时缓存后播放，退出时 30s 自动清理。
+/// 支持手势控制（双击跳过、滑动 seek）、控制按钮、倍速等功能。
 class VideoPlayerScreen extends StatefulWidget {
   final String encPath;
   final String title;
@@ -33,6 +36,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   String? _error;
   String? _tempPath;
   Timer? _deleteTimer;
+
+  bool _isFullscreen = false;
 
   @override
   void initState() {
@@ -91,6 +96,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
   }
 
+  // --- 全屏 ---
+
+  void _toggleFullscreen() {
+    setState(() => _isFullscreen = !_isFullscreen);
+  }
+
+  // --- 手势回调 ---
+
+  void _onGestureTap() {
+    if (_controller != null && _controller!.value.isPlaying) {
+      _controller!.pause();
+    } else {
+      _controller!.play();
+    }
+    setState(() {});
+  }
+
   @override
   void dispose() {
     _deleteTimer?.cancel();
@@ -110,17 +132,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: colorScheme.surface.withValues(alpha: 0.85),
-        foregroundColor: colorScheme.onSurface,
-        elevation: 0,
-        title: Text(
-          widget.title,
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
-      ),
+      appBar: _buildAppBar(colorScheme),
       body: Center(
         child: _buildContent(colorScheme),
+      ),
+    );
+  }
+
+  PreferredSizeWidget? _buildAppBar(ColorScheme colorScheme) {
+    return AppBar(
+      backgroundColor: Colors.black.withValues(alpha: 0.6),
+      foregroundColor: Colors.white,
+      elevation: 0,
+      title: Text(
+        widget.title,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 16,
+        ),
       ),
     );
   }
@@ -164,119 +193,41 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
 
     if (_controller != null && _controller!.value.isInitialized) {
-      return GestureDetector(
-        onTap: () {
-          if (_controller!.value.isPlaying) {
-            _controller!.pause();
-          } else {
-            _controller!.play();
-          }
-          setState(() {});
-        },
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            // 视频
-            Center(
-              child: AspectRatio(
-                aspectRatio: _controller!.value.aspectRatio,
-                child: VideoPlayer(_controller!),
-              ),
-            ),
-
-            // 播放/暂停控制
-            if (!_controller!.value.isPlaying)
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: colorScheme.surface.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(32),
-                ),
-                child: Icon(
-                  Icons.play_arrow_rounded,
-                  color: colorScheme.onSurface,
-                  size: 40,
-                ),
-              ),
-
-            // 底部进度条
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: _buildProgressBar(),
-            ),
-          ],
-        ),
-      );
+      return _buildPlayer(colorScheme);
     }
 
     return const SizedBox.shrink();
   }
 
-  Widget _buildProgressBar() {
-    if (_controller == null) { return const SizedBox.shrink(); }
-
-    return ValueListenableBuilder(
-      valueListenable: _controller!,
-      builder: (context, VideoPlayerValue value, child) {
-        final duration = value.duration.inMilliseconds.toDouble();
-        final position = value.position.inMilliseconds.toDouble();
-        final progress = duration > 0 ? position / duration : 0.0;
-        final colorScheme = Theme.of(context).colorScheme;
-
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SliderTheme(
-              data: SliderThemeData(
-                trackHeight: 3,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-                activeTrackColor: colorScheme.onSurface,
-                inactiveTrackColor: colorScheme.onSurface.withValues(alpha: 0.15),
-                thumbColor: colorScheme.onSurface,
-              ),
-              child: Slider(
-                value: progress.clamp(0.0, 1.0),
-                onChanged: (v) {
-                  final newPosition =
-                      Duration(milliseconds: (v * duration).round());
-                  _controller!.seekTo(newPosition);
-                },
-              ),
+  Widget _buildPlayer(ColorScheme colorScheme) {
+    return PlayerGesture(
+      controller: _controller!,
+      onTap: _onGestureTap,
+      controlsVisible: true,
+      child: Stack(
+        fit: StackFit.expand,
+        alignment: Alignment.center,
+        children: [
+          // 视频画面
+          Center(
+            child: AspectRatio(
+              aspectRatio: _controller!.value.aspectRatio,
+              child: VideoPlayer(_controller!),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    _formatDuration(value.position),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.7),
-                    ),
-                  ),
-                  Text(
-                    _formatDuration(value.duration),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.7),
-                    ),
-                  ),
-                ],
-              ),
+          ),
+
+          // 底部控制栏
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: PlayerControls(
+              controller: _controller!,
+              onToggleFullscreen: _toggleFullscreen,
             ),
-          ],
-        );
-      },
+          ),
+        ],
+      ),
     );
-  }
-
-  String _formatDuration(Duration d) {
-    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
   }
 }

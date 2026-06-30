@@ -362,6 +362,32 @@ class VideoListProvider extends ChangeNotifier {
     return await ThumbnailService.cleanupExpiredCache(cacheDir);
   }
 
+  /// 获取同一文件夹下的相邻视频
+  ///
+  /// [currentEncPath] 当前视频的加密路径。
+  /// [folderName] 所属文件夹名，null 表示根目录。
+  /// 返回 [prev, next]，不存在的方向为 null。
+  ({VideoItem? prev, VideoItem? next}) getAdjacentVideos(
+    String currentEncPath, {
+    String? folderName,
+  }) {
+    final folderVideos = getVideosInFolder(folderName);
+    final currentIndex = folderVideos.indexWhere(
+      (v) => v.encPath == currentEncPath,
+    );
+
+    if (currentIndex == -1) {
+      return (prev: null, next: null);
+    }
+
+    return (
+      prev: currentIndex > 0 ? folderVideos[currentIndex - 1] : null,
+      next: currentIndex < folderVideos.length - 1
+          ? folderVideos[currentIndex + 1]
+          : null,
+    );
+  }
+
   // --- 内部方法 ---
 
   void _setProcessingState(String videoId, String state) {
