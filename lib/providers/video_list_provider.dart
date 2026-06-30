@@ -107,6 +107,8 @@ class VideoListProvider extends ChangeNotifier {
 
     // 循环结束后只扫描一次
     await loadVideos();
+    // 立即加载缩略图，让新添加的视频可见时就有封面
+    unawaited(loadThumbnails());
   }
 
   /// 解密视频到导出目录

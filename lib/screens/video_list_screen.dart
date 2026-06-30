@@ -184,7 +184,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
           ],
         ),
       ),
-      floatingActionButton: _buildFab(),
+      floatingActionButton: null,
       bottomNavigationBar: _buildBottomBar(),
     );
   }
@@ -200,6 +200,15 @@ class _VideoListScreenState extends State<VideoListScreen> {
         ),
       ),
       actions: [
+        IconButton(
+          icon: const Icon(Icons.add_rounded, size: 20),
+          tooltip: '添加视频',
+          onPressed: () {
+            context.read<VideoListProvider>().pickAndEncryptVideos(
+              targetFolder: context.read<FolderProvider>().selectedFolder,
+            );
+          },
+        ),
         IconButton(
           icon: const Icon(Icons.cleaning_services_rounded, size: 20),
           tooltip: '清理缓存',
@@ -291,18 +300,6 @@ class _VideoListScreenState extends State<VideoListScreen> {
           ),
         );
       },
-    );
-  }
-
-  Widget _buildFab() {
-    return FloatingActionButton.extended(
-      onPressed: () {
-        context.read<VideoListProvider>().pickAndEncryptVideos(
-          targetFolder: context.read<FolderProvider>().selectedFolder,
-        );
-      },
-      icon: const Icon(Icons.add_rounded),
-      label: const Text('选择视频加密'),
     );
   }
 
