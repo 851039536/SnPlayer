@@ -79,11 +79,23 @@ const int parallelDecryptMinFileSize = 64 * 1024 * 1024;
 /// 中等文件阈值（256MB），超过此值使用 4 Isolate，否则用 2 Isolate
 const int parallelDecryptMidFileSize = 256 * 1024 * 1024;
 
-/// 并行解密最大 Isolate 数
+/// 并行解密最大 Isolate 数（4 路并行，用于 256-512MB 文件）
+/// 与 concurrency=2 配合，分 2 批启动，每批 2 个，安全可控
 const int parallelDecryptMaxIsolates = 4;
 
 /// 并行解密中等 Isolate 数（2 路并行，用于 64-256MB 文件）
 const int parallelDecryptMidIsolates = 2;
+
+/// 大文件阈值（512MB），超过此值使用 6 路并行解密
+const int parallelDecryptLargeFileSize = 512 * 1024 * 1024;
+
+/// 并行解密大文件 Isolate 数（6 路并行，用于 >512MB 文件）
+/// 配合 concurrency=2，分 3 批启动，每批 2 个 Isolate，内存安全
+const int parallelDecryptLargeIsolates = 6;
+
+/// 并行解密最大并发数（同一时间最多运行的 Isolate 数）
+/// 分批启动避免瞬时内存压力过大
+const int parallelDecryptMaxConcurrency = 2;
 
 /// 加密视频存储根目录（相对 /sdcard/Download/）
 const String lockVideoDirName = 'MewTool/LockVideo';

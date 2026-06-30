@@ -49,6 +49,7 @@ void cryptoWorker(SendPort sendPort) {
           outputPath: outputPath,
           startOffset: (message['startOffset'] as int?) ?? 0,
           chunkLength: (message['chunkLength'] as int?) ?? 0,
+          writeOffset: (message['writeOffset'] as int?) ?? 0,
           keyBase64: message['keyBase64'] as String? ?? '',
           ivBase64: message['ivBase64'] as String? ?? '',
           chunkIndex: (message['chunkIndex'] as int?) ?? 0,
@@ -259,17 +260,18 @@ Future<void> _processFile(
   }
 }
 
-/// 并行解密块 Worker：解密文件的一个指定区间
+/// 并行解密块 Worker：解密文件的一个指定区间，写入临时块文件
 ///
 /// 接收主线程派发的 [startOffset] + [chunkLength] + 已调整的 [keyBase64]/[ivBase64]，
-/// 独立解密对应区间并写入临时块文件。
+/// 独立解密对应区间并写入临时文件，由主线程后续按偏移复制到输出文件。
 ///
-/// 内部仍使用双缓冲流水线（4MB 缓冲区），I/O 预读与 CPU 解密并行。
+/// 内部使用双缓冲流水线（4MB 缓冲区），I/O 预读与 CPU 解密并行。
 Future<void> _decryptChunkInIsolate({
   required String inputPath,
   required String outputPath,
   required int startOffset,
   required int chunkLength,
+  required int writeOffset,
   required String keyBase64,
   required String ivBase64,
   required int chunkIndex,
@@ -286,6 +288,8 @@ Future<void> _decryptChunkInIsolate({
 
   final inputFile = File(inputPath);
   final raf = inputFile.openSync(mode: FileMode.read);
+
+  // 写入临时块文件
   final output = File(outputPath).openWrite(mode: FileMode.writeOnly);
 
   try {

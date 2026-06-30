@@ -209,8 +209,8 @@ class CryptoService {
 
   /// 并行分块解密文件
   ///
-  /// 利用 AES-CTR 的随机访问特性，将密文数据切分为 2~4 块，
-  /// 各块在独立 Isolate 中并行解密，最后按序合并。
+  /// 利用 AES-CTR 的随机访问特性，将密文数据切分为 2~8 块，
+  /// 各块在独立 Isolate 中并行解密，直接写入输出文件对应偏移位置。
   ///
   /// 文件大小 < 64MB 不触发并行（由 [decryptToTemp] 控制）。
   static Future<void> decryptFileParallel(
@@ -218,24 +218,11 @@ class CryptoService {
     String outputPath, {
     void Function(double)? onProgress,
   }) async {
-    final chunksDir = p.join(p.dirname(outputPath), 'chunks');
-
-    try {
-      // 确保块临时目录存在
-      await Directory(chunksDir).create(recursive: true);
-
-      await _runParallelDecrypt(
-        inputPath: inputPath,
-        outputPath: outputPath,
-        chunksDir: chunksDir,
-        onProgress: onProgress,
-      );
-    } finally {
-      // 清理块临时目录
-      if (await Directory(chunksDir).exists()) {
-        await Directory(chunksDir).delete(recursive: true);
-      }
-    }
+    await _runParallelDecrypt(
+      inputPath: inputPath,
+      outputPath: outputPath,
+      onProgress: onProgress,
+    );
   }
 
   /// 部分解密到临时文件（仅解密用于缩略图提取的前 N MB）
@@ -316,15 +303,13 @@ class CryptoService {
   /// 并行分块解密核心调度
   ///
   /// 1. 读取文件头获取 IV + Salt
-  /// 2. 派生密钥（命中缓存则跳过 PBKDF2）
-  /// 3. 计算分块数和边界
-  /// 4. 为每块计算 adjusted IV
-  /// 5. 并行 spawn Isolate 执行各块解密
-  /// 6. 所有块完成后 merge
+  /// 2. 派生密钥
+  /// 3. 计算分块数和边界（16 字节对齐）
+  /// 4. 预分配输出文件
+  /// 5. 分批 spawn Isolate 到临时文件，主线程按偏移复制到输出
   static Future<void> _runParallelDecrypt({
     required String inputPath,
     required String outputPath,
-    required String chunksDir,
     void Function(double)? onProgress,
   }) async {
     // 1. 读取文件头获取 IV 和 Salt
@@ -352,8 +337,7 @@ class CryptoService {
     final key = deriveKey(passwordBytes, salt);
     final keyBase64 = base64.encode(key);
 
-    // 3. 计算分块数和每块边界
-    // chunkSize 必须 16 字节对齐，确保 CTR counter 递推精确
+    // 3. 计算分块数和每块边界（chunkSize 必须 16 字节对齐）
     final cipherDataSize = fileSize - headerSize;
     final isolateCount = _getChunkCount(cipherDataSize);
     final rawChunkSize = cipherDataSize ~/ isolateCount;
@@ -362,9 +346,17 @@ class CryptoService {
     debugPrint('[SnPlayer] 并行解密: 文件=${fileSize}B, 密文=${cipherDataSize}B, '
         '分$isolateCount块, 每块≈${(chunkSize / 1024 / 1024).toStringAsFixed(1)}MB');
 
-    // 4. 为每个块启动 Isolate
-    final chunkPaths = <String>[];
+    // 4. 预分配输出文件
+    final outputFile = File(outputPath);
+    final outputRaf = outputFile.openSync(mode: FileMode.write);
+    outputRaf.setPositionSync(cipherDataSize - 1);
+    outputRaf.writeByteSync(0);
+    outputRaf.closeSync();
+
+    // 5. 分批启动 Isolate
     final pendingFutures = <Future<void>>[];
+    final chunkTempPaths = <String>[];
+    final chunkWriteOffsets = <int>[];
 
     for (int i = 0; i < isolateCount; i++) {
       final startOffset = i * chunkSize;
@@ -376,14 +368,17 @@ class CryptoService {
       final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
       final ivBase64 = base64.encode(adjustedIv);
 
-      final chunkPath = p.join(chunksDir, 'chunk_$i.tmp');
-      chunkPaths.add(chunkPath);
+      // 临时块文件路径
+      final tempPath = '$outputPath.chunk_$i.tmp';
+      chunkTempPaths.add(tempPath);
+      chunkWriteOffsets.add(startOffset);
 
       final future = _spawnChunkIsolate(
         inputPath: inputPath,
-        outputPath: chunkPath,
+        outputPath: tempPath,
         startOffset: startOffset,
         chunkLength: length,
+        writeOffset: startOffset,
         keyBase64: keyBase64,
         ivBase64: ivBase64,
         chunkIndex: i,
@@ -392,25 +387,75 @@ class CryptoService {
       );
 
       pendingFutures.add(future);
+
+      // 每批 parallelDecryptMaxConcurrency 个，完成后复制到输出文件
+      if (pendingFutures.length >= parallelDecryptMaxConcurrency) {
+        await Future.wait(pendingFutures);
+        // 主线程将本批临时文件复制到输出文件对应偏移
+        await _writeBatchToOutput(chunkTempPaths, chunkWriteOffsets, outputPath);
+        // 清理临时文件
+        for (final p in chunkTempPaths) {
+          try { await File(p).delete(); } catch (_) {}
+        }
+        pendingFutures.clear();
+        chunkTempPaths.clear();
+        chunkWriteOffsets.clear();
+        // 让出事件循环，防止 UI 线程饥饿
+        await Future.delayed(Duration.zero);
+      }
     }
 
-    // 5. 等待所有块完成
-    await Future.wait(pendingFutures);
+    // 6. 处理剩余的块
+    if (pendingFutures.isNotEmpty) {
+      await Future.wait(pendingFutures);
+      await _writeBatchToOutput(chunkTempPaths, chunkWriteOffsets, outputPath);
+      for (final p in chunkTempPaths) {
+        try { await File(p).delete(); } catch (_) {}
+      }
+    }
 
-    // 6. 合并块文件
-    debugPrint('[SnPlayer] 并行解密完成，开始合并 $isolateCount 个块...');
-    await _mergeChunks(chunkPaths, outputPath);
-
-    // 通知 100% 进度
     onProgress?.call(1.0);
+  }
+
+  /// 将一批临时块文件按各自偏移写入输出文件
+  static Future<void> _writeBatchToOutput(
+    List<String> tempPaths,
+    List<int> writeOffsets,
+    String outputPath,
+  ) async {
+    final outputRaf = File(outputPath).openSync(mode: FileMode.writeOnlyAppend);
+    try {
+      final copyBuf = Uint8List(bufferSize);
+      for (int i = 0; i < tempPaths.length; i++) {
+        final chunkFile = File(tempPaths[i]);
+        final raf = chunkFile.openSync(mode: FileMode.read);
+        try {
+          outputRaf.setPositionSync(writeOffsets[i]);
+          int bytesRead;
+          do {
+            bytesRead = raf.readIntoSync(copyBuf);
+            if (bytesRead > 0) {
+              outputRaf.writeFromSync(copyBuf, 0, bytesRead);
+            }
+          } while (bytesRead == bufferSize);
+        } finally {
+          raf.closeSync();
+        }
+      }
+    } finally {
+      outputRaf.closeSync();
+    }
   }
 
   /// 确定分块数
   static int _getChunkCount(int cipherDataSize) {
-    if (cipherDataSize >= parallelDecryptMidFileSize) {
-      return parallelDecryptMaxIsolates;
+    if (cipherDataSize >= parallelDecryptLargeFileSize) {
+      return parallelDecryptLargeIsolates; // >512MB: 8 路
     }
-    return parallelDecryptMidIsolates;
+    if (cipherDataSize >= parallelDecryptMidFileSize) {
+      return parallelDecryptMaxIsolates;  // 256-512MB: 4 路
+    }
+    return parallelDecryptMidIsolates;    // 64-256MB: 2 路
   }
 
   /// 启动单个块解密 Isolate
@@ -419,6 +464,7 @@ class CryptoService {
     required String outputPath,
     required int startOffset,
     required int chunkLength,
+    required int writeOffset,
     required String keyBase64,
     required String ivBase64,
     required int chunkIndex,
@@ -438,7 +484,6 @@ class CryptoService {
         if (type == 'progress') {
           final value = (event['value'] as num?)?.toDouble();
           if (value != null && onProgress != null) {
-            // 加权聚合：每个块的进度映射到全局进度
             final globalProgress =
                 (chunkIndex + value) / totalChunks;
             onProgress(globalProgress);
@@ -464,6 +509,7 @@ class CryptoService {
         'outputPath': outputPath,
         'startOffset': startOffset,
         'chunkLength': chunkLength,
+        'writeOffset': writeOffset,
         'keyBase64': keyBase64,
         'ivBase64': ivBase64,
         'chunkIndex': chunkIndex,
@@ -483,36 +529,6 @@ class CryptoService {
       } catch (e) {
         isolate.kill(priority: Isolate.immediate);
       }
-    }
-  }
-
-  /// 按序合并各块文件到最终输出文件
-  static Future<void> _mergeChunks(List<String> chunkPaths, String outputPath) async {
-    final output = File(outputPath).openWrite(mode: FileMode.writeOnly);
-
-    try {
-      // 4MB merge 缓冲区，减少系统调用
-      final mergeBuf = Uint8List(bufferSize);
-
-      for (final chunkPath in chunkPaths) {
-        final chunkFile = File(chunkPath);
-        final raf = await chunkFile.open(mode: FileMode.read);
-
-        try {
-          int bytesRead;
-          do {
-            bytesRead = await raf.readInto(mergeBuf);
-            if (bytesRead > 0) {
-              output.add(mergeBuf.sublist(0, bytesRead));
-            }
-          } while (bytesRead == bufferSize);
-        } finally {
-          await raf.close();
-        }
-      }
-    } finally {
-      await output.flush();
-      await output.close();
     }
   }
 
