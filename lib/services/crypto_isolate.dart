@@ -163,7 +163,9 @@ Future<void> _processFile(
 
       // 处理当前块：CTR 批量加解密
       cipher.processBytes(readBuf, 0, bytesRead, procBuf, 0);
-      output.add(Uint8List.sublistView(procBuf, 0, bytesRead));
+      // 必须用 sublist（复制），因为 procBuf 下一轮会被覆盖，
+      // 若 IOSink 尚未 flush 则会引用到已被改写的数据
+      output.add(procBuf.sublist(0, bytesRead));
 
       // 进度回传
       if (progressPort != null) {
