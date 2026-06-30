@@ -130,16 +130,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Widget _buildContent(ColorScheme colorScheme) {
     if (_isLoading) {
-      return Column(
+      return const Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(
-            color: colorScheme.onSurface.withValues(alpha: 0.7)),
-          const SizedBox(height: AppSpacing.xl),
+          CircularProgressIndicator(color: Colors.white70),
+          SizedBox(height: AppSpacing.xl),
           Text(
             '正在解密视频...',
-            style: TextStyle(
-              color: colorScheme.onSurface.withValues(alpha: 0.7)),
+            style: TextStyle(color: Colors.white70, fontSize: 15),
           ),
         ],
       );
@@ -149,12 +147,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.error_outline, size: 48, color: colorScheme.error),
+          Icon(Icons.error_outline, size: 48, color: Colors.white70),
           const SizedBox(height: AppSpacing.xl),
           Text(
             _error!,
-            style: TextStyle(
-              color: colorScheme.onSurface.withValues(alpha: 0.7)),
+            style: const TextStyle(color: Colors.white70, fontSize: 15),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xxxl),

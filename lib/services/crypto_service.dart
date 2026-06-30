@@ -32,7 +32,7 @@ class CryptoService {
     return key;
   }
 
-  /// 加密文件（在后台 Isolate 中执行，不阻塞 UI）
+  /// 加密文件（自动选择串行或并行策略）
   ///
   /// [inputPath] 原始视频文件路径
   /// [outputPath] 加密输出路径（.enc）
@@ -42,8 +42,28 @@ class CryptoService {
     String outputPath, {
     void Function(double)? onProgress,
   }) async {
-    await _runInIsolate(
-      command: 'encrypt',
+    final fileSize = await File(inputPath).length();
+    if (fileSize >= parallelDecryptMinFileSize) {
+      await encryptFileParallel(inputPath, outputPath, onProgress: onProgress);
+    } else {
+      await _runInIsolate(
+        command: 'encrypt',
+        inputPath: inputPath,
+        outputPath: outputPath,
+        onProgress: onProgress,
+      );
+    }
+  }
+
+  /// 并行分块加密文件
+  ///
+  /// 生成随机 IV/Salt，派生密钥，写入文件头，然后分块并行 CTR 加密。
+  static Future<void> encryptFileParallel(
+    String inputPath,
+    String outputPath, {
+    void Function(double)? onProgress,
+  }) async {
+    await _runParallelEncrypt(
       inputPath: inputPath,
       outputPath: outputPath,
       onProgress: onProgress,
@@ -447,10 +467,181 @@ class CryptoService {
     }
   }
 
+  // --- 并行加密 ---
+
+  /// 并行分块加密核心调度
+  ///
+  /// 生成 IV/Salt → 派生密钥 → 写文件头 → 分块并行 CTR 加密
+  static Future<void> _runParallelEncrypt({
+    required String inputPath,
+    required String outputPath,
+    void Function(double)? onProgress,
+  }) async {
+    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
+
+    // 1. 生成随机 IV 和 Salt
+    final iv = _generateRandomBytes(ivLength);
+    final salt = _generateRandomBytes(saltLength);
+
+    // 2. 派生密钥
+    final key = deriveKey(passwordBytes, salt);
+    final keyBase64 = base64.encode(key);
+
+    // 3. 构建并写入文件头
+    final header = Uint8List(headerSize);
+    header.setAll(0, iv);
+    header.setAll(ivLength, salt);
+    header[versionOffset] = versionByte;
+
+    // 4. 获取原始文件大小，计算分块
+    final rawSize = await File(inputPath).length();
+    final isolateCount = _getChunkCount(rawSize);
+    final rawChunkSize = rawSize ~/ isolateCount;
+    final chunkSize = (rawChunkSize ~/ aesBlockSize) * aesBlockSize;
+
+    debugPrint('[SnPlayer] 并行加密: 文件=${rawSize}B, '
+        '分$isolateCount块, 每块≈${(chunkSize / 1024 / 1024).toStringAsFixed(1)}MB');
+
+    // 5. 写文件头 + 预分配输出文件（header + 密文）
+    final cipherDataSize = rawSize; // 密文长度 = 原始长度
+    final totalSize = headerSize + cipherDataSize;
+    final outputFile = File(outputPath);
+    final outputRaf = outputFile.openSync(mode: FileMode.write);
+    outputRaf.writeFromSync(header, 0, headerSize);
+    outputRaf.setPositionSync(totalSize - 1);
+    outputRaf.writeByteSync(0);
+    outputRaf.closeSync();
+
+    // 6. 分批启动加密 Isolate
+    final pendingFutures = <Future<void>>[];
+    final chunkTempPaths = <String>[];
+    final chunkWriteOffsets = <int>[];
+
+    for (int i = 0; i < isolateCount; i++) {
+      final startOffset = i * chunkSize;
+      final length = (i == isolateCount - 1)
+          ? rawSize - startOffset
+          : chunkSize;
+
+      // 计算调整后的 IV
+      final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
+      final adjustedIvBase64 = base64.encode(adjustedIv);
+
+      final tempPath = '$outputPath.chunk_$i.tmp';
+      chunkTempPaths.add(tempPath);
+      // 密文数据在输出文件中的偏移 = 文件头 + 块起始位置
+      chunkWriteOffsets.add(headerSize + startOffset);
+
+      final future = _spawnEncryptChunkIsolate(
+        inputPath: inputPath,
+        outputPath: tempPath,
+        startOffset: startOffset,
+        chunkLength: length,
+        keyBase64: keyBase64,
+        ivBase64: adjustedIvBase64,
+        chunkIndex: i,
+        totalChunks: isolateCount,
+        onProgress: onProgress,
+      );
+
+      pendingFutures.add(future);
+
+      if (pendingFutures.length >= parallelDecryptMaxConcurrency) {
+        await Future.wait(pendingFutures);
+        await _writeBatchToOutput(chunkTempPaths, chunkWriteOffsets, outputPath);
+        for (final p in chunkTempPaths) {
+          try { await File(p).delete(); } catch (_) {}
+        }
+        pendingFutures.clear();
+        chunkTempPaths.clear();
+        chunkWriteOffsets.clear();
+        await Future.delayed(Duration.zero);
+      }
+    }
+
+    if (pendingFutures.isNotEmpty) {
+      await Future.wait(pendingFutures);
+      await _writeBatchToOutput(chunkTempPaths, chunkWriteOffsets, outputPath);
+      for (final p in chunkTempPaths) {
+        try { await File(p).delete(); } catch (_) {}
+      }
+    }
+
+    onProgress?.call(1.0);
+  }
+
+  /// 启动单个加密块 Isolate
+  static Future<void> _spawnEncryptChunkIsolate({
+    required String inputPath,
+    required String outputPath,
+    required int startOffset,
+    required int chunkLength,
+    required String keyBase64,
+    required String ivBase64,
+    required int chunkIndex,
+    required int totalChunks,
+    void Function(double)? onProgress,
+  }) async {
+    final completer = Completer<void>();
+
+    final receivePort = ReceivePort();
+    final isolate = await Isolate.spawn(cryptoWorker, receivePort.sendPort);
+    final workerSendPort = await receivePort.first as SendPort;
+
+    final progressPort = ReceivePort();
+    progressPort.listen((event) {
+      if (event is Map) {
+        final type = event['type'] as String?;
+        if (type == 'progress') {
+          final value = (event['value'] as num?)?.toDouble();
+          if (value != null && onProgress != null) {
+            onProgress((chunkIndex + value) / totalChunks);
+          }
+        } else if (type == 'done') {
+          if (!completer.isCompleted) { completer.complete(); }
+        } else if (type == 'error') {
+          final msg = event['message'] as String? ?? 'Unknown error';
+          if (!completer.isCompleted) {
+            completer.completeError(Exception(
+                'Encrypt chunk $chunkIndex/$totalChunks failed: $msg'));
+          }
+        }
+      }
+    });
+
+    try {
+      workerSendPort.send({
+        'command': 'encrypt_chunk',
+        'inputPath': inputPath,
+        'outputPath': outputPath,
+        'startOffset': startOffset,
+        'chunkLength': chunkLength,
+        'keyBase64': keyBase64,
+        'ivBase64': ivBase64,
+        'chunkIndex': chunkIndex,
+        'totalChunks': totalChunks,
+        'progressPort': progressPort.sendPort,
+      });
+
+      await completer.future.timeout(_isolateTimeout, onTimeout: () {
+        throw TimeoutException(
+            'Encrypt chunk $chunkIndex/$totalChunks timeout (${_isolateTimeout.inSeconds}s)');
+      });
+    } finally {
+      progressPort.close();
+      receivePort.close();
+      try {
+        isolate.kill(priority: Isolate.beforeNextEvent);
+      } catch (e) {
+        isolate.kill(priority: Isolate.immediate);
+      }
+    }
+  }
+
   /// 确定分块数
   static int _getChunkCount(int cipherDataSize) {
     if (cipherDataSize >= parallelDecryptLargeFileSize) {
-      return parallelDecryptLargeIsolates; // >512MB: 8 路
+      return parallelDecryptLargeIsolates; // >512MB: 6 路
     }
     if (cipherDataSize >= parallelDecryptMidFileSize) {
       return parallelDecryptMaxIsolates;  // 256-512MB: 4 路
