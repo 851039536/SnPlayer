@@ -44,7 +44,7 @@ class VideoCard extends StatelessWidget {
             _buildThumbnail(colorScheme),
             // 信息区域
             Padding(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

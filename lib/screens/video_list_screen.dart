@@ -230,7 +230,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
               crossAxisCount: 2,
               mainAxisSpacing: 8,
               crossAxisSpacing: 8,
-              childAspectRatio: 0.75,
+              childAspectRatio: 1.0,
             ),
             delegate: SliverChildBuilderDelegate(
               (context, index) {
