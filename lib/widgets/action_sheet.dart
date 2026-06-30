@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_spacing.dart';
+import '../theme/app_radius.dart';
+
 /// 操作菜单项
 class ActionSheetItem {
   final IconData icon;
@@ -37,8 +40,9 @@ class ActionSheet extends StatelessWidget {
     return showModalBottomSheet(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.xxl)),
       ),
       builder: (_) => ActionSheet(title: title, items: items),
     );
@@ -50,14 +54,15 @@ class ActionSheet extends StatelessWidget {
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.only(bottom: AppSpacing.lg),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             // 拖拽指示条
             Center(
               child: Container(
-                margin: const EdgeInsets.only(top: 8, bottom: 8),
+                margin: const EdgeInsets.only(
+                  top: AppSpacing.md, bottom: AppSpacing.md),
                 width: 32,
                 height: 4,
                 decoration: BoxDecoration(
@@ -70,7 +75,8 @@ class ActionSheet extends StatelessWidget {
             // 标题
             if (title != null) ...[
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xxl, vertical: AppSpacing.md),
                 child: Text(
                   title!,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -85,9 +91,9 @@ class ActionSheet extends StatelessWidget {
             ...items.map((item) => _buildItem(context, item)),
 
             // 取消按钮
-            const SizedBox(height: 8),
+            SizedBox(height: AppSpacing.md),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
@@ -95,7 +101,7 @@ class ActionSheet extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(AppRadius.lg),
                     ),
                   ),
                   child: const Text('取消'),
@@ -117,7 +123,8 @@ class ActionSheet extends StatelessWidget {
         item.onTap();
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.xxl, vertical: AppSpacing.lg),
         child: Row(
           children: [
             Container(
@@ -125,7 +132,7 @@ class ActionSheet extends StatelessWidget {
               height: 40,
               decoration: BoxDecoration(
                 color: (item.color ?? colorScheme.primary).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(AppRadius.sm + 4),
               ),
               child: Icon(
                 item.icon,
@@ -133,7 +140,7 @@ class ActionSheet extends StatelessWidget {
                 size: 22,
               ),
             ),
-            const SizedBox(width: 16),
+            SizedBox(width: AppSpacing.xl),
             Text(
               item.label,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(

@@ -11,6 +11,9 @@ import '../widgets/video_card.dart';
 import '../widgets/folder_tabs.dart';
 import '../widgets/action_sheet.dart';
 import '../widgets/storage_stats_dialog.dart';
+import '../theme/app_spacing.dart';
+import '../theme/app_radius.dart';
+import '../theme/app_theme.dart';
 import 'video_player_screen.dart';
 import 'folder_manage_screen.dart';
 
@@ -77,7 +80,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const CircularProgressIndicator(),
-              const SizedBox(height: 16),
+              SizedBox(height: AppSpacing.xl),
               Text('正在初始化...',
                 style: TextStyle(color: colorScheme.onSurfaceVariant),
               ),
@@ -92,25 +95,25 @@ class _VideoListScreenState extends State<VideoListScreen> {
         backgroundColor: colorScheme.surface,
         body: Center(
           child: Padding(
-            padding: const EdgeInsets.all(32),
+            padding: const EdgeInsets.all(AppSpacing.huge),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(Icons.folder_off_rounded, size: 72,
                   color: colorScheme.onSurfaceVariant.withOpacity(0.5)),
-                const SizedBox(height: 24),
+                SizedBox(height: AppSpacing.xxxl),
                 Text('需要存储权限才能访问视频文件',
                   style: Theme.of(context).textTheme.titleMedium,
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 8),
+                SizedBox(height: AppSpacing.md),
                 Text('请在设置中授予存储权限',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 24),
+                SizedBox(height: AppSpacing.xxxl),
                 FilledButton.icon(
                   onPressed: _initApp,
                   icon: const Icon(Icons.security_rounded),
@@ -202,14 +205,14 @@ class _VideoListScreenState extends State<VideoListScreen> {
                   Icon(Icons.video_library_outlined, size: 64,
                     color: Theme.of(context)
                         .colorScheme.onSurfaceVariant.withOpacity(0.3)),
-                  const SizedBox(height: 16),
+                  SizedBox(height: AppSpacing.xl),
                   Text(
                     '还没有加密视频',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  SizedBox(height: AppSpacing.md),
                   Text(
                     '点击右下角 + 按钮开始加密',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -224,12 +227,12 @@ class _VideoListScreenState extends State<VideoListScreen> {
         }
 
         return SliverPadding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(AppSpacing.lg),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
-              mainAxisSpacing: 8,
-              crossAxisSpacing: 8,
+              mainAxisSpacing: AppSpacing.md,
+              crossAxisSpacing: AppSpacing.md,
               childAspectRatio: 1.0,
             ),
             delegate: SliverChildBuilderDelegate(
@@ -268,30 +271,27 @@ class _VideoListScreenState extends State<VideoListScreen> {
       builder: (context, videoProvider, _) {
         final videos = videoProvider.videos;
         final totalSize = videos.fold<int>(0, (sum, v) => sum + v.fileSize);
+        final colorScheme = Theme.of(context).colorScheme;
 
         return GestureDetector(
           onTap: _showStorageStats,
           child: Container(
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            margin: EdgeInsets.fromLTRB(
+              AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
+            padding: EdgeInsets.symmetric(
+              horizontal: AppSpacing.xl, vertical: 10),
             decoration: BoxDecoration(
-              color: Theme.of(context)
-                  .colorScheme.surfaceContainerHigh.withOpacity(0.9),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 12,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              color: colorScheme.surfaceContainerHigh.withOpacity(0.9),
+              borderRadius: BorderRadius.circular(AppRadius.xl),
+              border: Border.all(color: colorScheme.outlineVariant),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.videocam_rounded, size: 16,
-                  color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 6),
+                Icon(Icons.videocam_rounded,
+                  size: AppSpacing.xl,
+                  color: colorScheme.primary),
+                SizedBox(width: AppSpacing.sm),
                 Text(
                   '${videos.length} 个加密视频 · ${FileUtils.formatFileSize(totalSize)}',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -326,7 +326,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
         ActionSheetItem(
           icon: Icons.file_download_rounded,
           label: '解密导出',
-          color: const Color(0xFF4CAF50),
+          color: AppColors.success,
           onTap: () => _decryptVideo(video, videoProvider),
         ),
         // 重命名

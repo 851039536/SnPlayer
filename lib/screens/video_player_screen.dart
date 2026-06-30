@@ -7,6 +7,7 @@ import '../services/crypto_service.dart';
 import '../services/safe_delete_helper.dart';
 import '../services/path_provider_service.dart';
 import '../config/crypto.dart';
+import '../theme/app_spacing.dart';
 
 /// 视频播放页面
 ///
@@ -94,12 +95,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.black54,
-        foregroundColor: Colors.white,
+        backgroundColor: colorScheme.surface.withOpacity(0.85),
+        foregroundColor: colorScheme.onSurface,
         elevation: 0,
         title: Text(
           widget.title,
-          style: const TextStyle(fontSize: 16),
+          style: Theme.of(context).textTheme.bodyLarge,
         ),
       ),
       body: Center(
@@ -113,11 +114,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const CircularProgressIndicator(color: Colors.white),
-          const SizedBox(height: 16),
+          CircularProgressIndicator(
+            color: colorScheme.onSurface.withOpacity(0.7)),
+          SizedBox(height: AppSpacing.xl),
           Text(
             '正在解密视频...',
-            style: TextStyle(color: Colors.white.withOpacity(0.7)),
+            style: TextStyle(
+              color: colorScheme.onSurface.withOpacity(0.7)),
           ),
         ],
       );
@@ -128,13 +131,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.error_outline, size: 48, color: colorScheme.error),
-          const SizedBox(height: 16),
+          SizedBox(height: AppSpacing.xl),
           Text(
             _error!,
-            style: TextStyle(color: Colors.white.withOpacity(0.7)),
+            style: TextStyle(
+              color: colorScheme.onSurface.withOpacity(0.7)),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 24),
+          SizedBox(height: AppSpacing.xxxl),
           ElevatedButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('返回'),
@@ -170,12 +174,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 width: 64,
                 height: 64,
                 decoration: BoxDecoration(
-                  color: Colors.black54,
+                  color: colorScheme.surface.withOpacity(0.4),
                   borderRadius: BorderRadius.circular(32),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.play_arrow_rounded,
-                  color: Colors.white,
+                  color: colorScheme.onSurface,
                   size: 40,
                 ),
               ),
@@ -204,6 +208,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         final duration = value.duration.inMilliseconds.toDouble();
         final position = value.position.inMilliseconds.toDouble();
         final progress = duration > 0 ? position / duration : 0.0;
+        final colorScheme = Theme.of(context).colorScheme;
 
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -213,9 +218,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 trackHeight: 3,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-                activeTrackColor: Colors.white,
-                inactiveTrackColor: Colors.white24,
-                thumbColor: Colors.white,
+                activeTrackColor: colorScheme.onSurface,
+                inactiveTrackColor: colorScheme.onSurface.withOpacity(0.15),
+                thumbColor: colorScheme.onSurface,
               ),
               child: Slider(
                 value: progress.clamp(0.0, 1.0),
@@ -227,17 +232,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              padding: EdgeInsets.fromLTRB(
+                AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     _formatDuration(value.position),
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurface.withOpacity(0.7),
+                    ),
                   ),
                   Text(
                     _formatDuration(value.duration),
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurface.withOpacity(0.7),
+                    ),
                   ),
                 ],
               ),

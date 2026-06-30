@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../utils/file_utils.dart';
+import '../theme/app_spacing.dart';
+import '../theme/app_radius.dart';
+import '../theme/app_theme.dart';
 
 /// 存储统计弹窗
 class StorageStatsDialog extends StatelessWidget {
@@ -28,11 +31,12 @@ class StorageStatsDialog extends StatelessWidget {
 
     return AlertDialog(
       backgroundColor: colorScheme.surfaceContainerHigh,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.xxl)),
       title: Row(
         children: [
           Icon(Icons.storage_rounded, color: colorScheme.primary),
-          const SizedBox(width: 10),
+          SizedBox(width: 10),
           const Text('存储统计'),
         ],
       ),
@@ -47,27 +51,27 @@ class StorageStatsDialog extends StatelessWidget {
             size: encSize,
             color: colorScheme.primary,
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: AppSpacing.lg),
           _buildStatRow(
             context,
             icon: Icons.image_rounded,
             label: '缩略图',
             count: tencCount,
             size: tencSize,
-            color: const Color(0xFF4CAF50),
+            color: AppColors.success,
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: AppSpacing.lg),
           _buildStatRow(
             context,
             icon: Icons.cached_rounded,
             label: '缓存文件',
             count: cacheCount,
             size: cacheSize,
-            color: const Color(0xFFFFC107),
+            color: AppColors.warning,
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: AppSpacing.xl),
           Divider(color: colorScheme.outlineVariant),
-          const SizedBox(height: 8),
+          SizedBox(height: AppSpacing.md),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -113,11 +117,11 @@ class StorageStatsDialog extends StatelessWidget {
           height: 36,
           decoration: BoxDecoration(
             color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(AppRadius.md),
           ),
           child: Icon(icon, color: color, size: 20),
         ),
-        const SizedBox(width: 12),
+        SizedBox(width: AppSpacing.lg),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

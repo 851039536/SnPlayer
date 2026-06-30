@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../models/video_folder.dart';
+import '../theme/app_spacing.dart';
+import '../theme/app_radius.dart';
 
 /// 文件夹标签栏组件
 ///
@@ -30,7 +32,7 @@ class FolderTabs extends StatelessWidget {
           Expanded(
             child: ListView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
               children: [
                 // "全部" 标签
                 _buildTab(
@@ -60,7 +62,7 @@ class FolderTabs extends StatelessWidget {
           // 文件夹管理按钮
           if (onManage != null)
             Padding(
-              padding: const EdgeInsets.only(right: 4),
+              padding: const EdgeInsets.only(right: AppSpacing.xs),
               child: IconButton(
                 icon: Icon(
                   Icons.folder_rounded,
@@ -90,13 +92,18 @@ class FolderTabs extends StatelessWidget {
       onTap: onTap,
       onLongPress: onLongPress,
       child: Container(
-        margin: const EdgeInsets.only(right: 8, top: 6, bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        margin: EdgeInsets.only(
+          right: AppSpacing.md,
+          top: AppSpacing.sm,
+          bottom: AppSpacing.sm,
+        ),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.xl, vertical: AppSpacing.md),
         decoration: BoxDecoration(
           color: isSelected
               ? color.withOpacity(0.2)
               : colorScheme.surfaceContainerHighest.withOpacity(0.4),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(AppRadius.xxl),
           border: Border.all(
             color: isSelected ? color : Colors.transparent,
             width: 1.5,
@@ -105,9 +112,8 @@ class FolderTabs extends StatelessWidget {
         child: Center(
           child: Text(
             label,
-            style: TextStyle(
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: isSelected ? color : colorScheme.onSurfaceVariant,
-              fontSize: 13,
               fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
             ),
           ),

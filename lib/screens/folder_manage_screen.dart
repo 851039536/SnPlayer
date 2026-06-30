@@ -2,6 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../theme/app_spacing.dart';
+import '../theme/app_radius.dart';
+import '../theme/app_theme.dart';
+
 /// 文件夹管理页面（BottomSheet）
 ///
 /// 支持创建/重命名/改色/删除文件夹
@@ -34,8 +38,9 @@ class FolderManageSheet extends StatefulWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.xxl)),
       ),
       builder: (_) => FolderManageSheet(
         folders: folders,
@@ -52,16 +57,7 @@ class FolderManageSheet extends StatefulWidget {
 }
 
 class _FolderManageSheetState extends State<FolderManageSheet> {
-  static const _presetColors = [
-    '#6750A4', // 紫
-    '#FF4D4D', // 红
-    '#FF9800', // 橙
-    '#FFC107', // 黄
-    '#4CAF50', // 绿
-    '#2196F3', // 蓝
-    '#00BCD4', // 青
-    '#E91E63', // 粉
-  ];
+  static const _presetColors = AppColors.presetFolderColors;
 
   @override
   Widget build(BuildContext context) {
@@ -69,7 +65,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.only(bottom: AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -77,7 +73,8 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
             // 拖拽指示条
             Center(
               child: Container(
-                margin: const EdgeInsets.only(top: 8, bottom: 16),
+                margin: EdgeInsets.only(
+                  top: AppSpacing.md, bottom: AppSpacing.xl),
                 width: 32,
                 height: 4,
                 decoration: BoxDecoration(
@@ -89,7 +86,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
 
             // 标题行
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -108,12 +105,12 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
               ),
             ),
 
-            const SizedBox(height: 8),
+            SizedBox(height: AppSpacing.md),
 
             // 文件夹列表
             if (widget.folders.isEmpty)
               Padding(
-                padding: const EdgeInsets.all(32),
+                padding: const EdgeInsets.all(AppSpacing.huge),
                 child: Text(
                   '还没有文件夹，点击右上角创建一个吧',
                   textAlign: TextAlign.center,
@@ -126,9 +123,9 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
               ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
                 itemCount: widget.folders.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                separatorBuilder: (_, __) => SizedBox(height: AppSpacing.md),
                 itemBuilder: (context, index) {
                   final folder = widget.folders[index];
                   return _buildFolderRow(context, folder);
@@ -147,7 +144,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
     return Container(
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
       ),
       child: ListTile(
         leading: Container(
@@ -155,14 +152,13 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
           height: 36,
           decoration: BoxDecoration(
             color: color.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(AppRadius.md),
           ),
           child: Icon(Icons.folder_rounded, color: color, size: 22),
         ),
         title: Text(folder.displayName),
         subtitle: Text('${folder.videoCount} 个视频',
-          style: TextStyle(
-            fontSize: 12,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: colorScheme.onSurfaceVariant,
           ),
         ),
@@ -183,9 +179,10 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
           itemBuilder: (_) => [
             const PopupMenuItem(value: 'rename', child: Text('重命名')),
             const PopupMenuItem(value: 'color', child: Text('修改颜色')),
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'delete',
-              child: Text('删除', style: TextStyle(color: Colors.red)),
+              child: Text('删除',
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
             ),
           ],
         ),
@@ -196,6 +193,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
   void _showCreateDialog(BuildContext context) {
     final controller = TextEditingController();
     String selectedColor = _presetColors[0];
+    final colorScheme = Theme.of(context).colorScheme;
 
     showDialog(
       context: context,
@@ -213,9 +211,9 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                 ),
                 autofocus: true,
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: AppSpacing.lg),
               Wrap(
-                spacing: 8,
+                spacing: AppSpacing.md,
                 children: _presetColors.map((color) {
                   final parsed = _parseColor(color);
                   return GestureDetector(
@@ -231,14 +229,10 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                         color: parsed,
                         shape: BoxShape.circle,
                         border: selectedColor == color
-                            ? Border.all(color: Colors.white, width: 2.5)
-                            : null,
-                        boxShadow: selectedColor == color
-                            ? [BoxShadow(
-                                color: parsed!.withOpacity(0.5),
-                                blurRadius: 8,
-                              )]
-                            : null,
+                            ? Border.all(
+                                color: colorScheme.onSurface, width: 2.5)
+                            : Border.all(
+                                color: Colors.transparent, width: 2.5),
                       ),
                     ),
                   );
@@ -309,13 +303,15 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
   }
 
   void _showColorPicker(BuildContext context, FolderData folder) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('修改颜色'),
         content: Wrap(
-          spacing: 12,
-          runSpacing: 12,
+          spacing: AppSpacing.lg,
+          runSpacing: AppSpacing.lg,
           children: _presetColors.map((color) {
             final parsed = _parseColor(color);
             final isSelected = folder.color == color;
@@ -332,15 +328,15 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                 decoration: BoxDecoration(
                   color: parsed,
                   shape: BoxShape.circle,
-                  border: isSelected
-                      ? Border.all(color: Colors.white, width: 3)
-                      : null,
-                  boxShadow: isSelected
-                      ? [BoxShadow(color: parsed!.withOpacity(0.5), blurRadius: 10)]
-                      : null,
+                  border: Border.all(
+                    color: isSelected
+                        ? colorScheme.onSurface
+                        : Colors.transparent,
+                    width: 3,
+                  ),
                 ),
                 child: isSelected
-                    ? const Icon(Icons.check, color: Colors.white, size: 20)
+                    ? Icon(Icons.check, color: colorScheme.onSurface, size: 20)
                     : null,
               ),
             );
