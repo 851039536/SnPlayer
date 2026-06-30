@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import '../models/video_item.dart';
 import '../config/crypto.dart';
-import 'path_provider_service.dart';
 
 /// 安全删除工具类
 ///
@@ -35,7 +35,8 @@ class SafeDeleteHelper {
         if (!await file.exists()) {
           return true;
         }
-      } catch (_) {
+      } catch (e) {
+        debugPrint('[SnPlayer] SafeDeleteHelper.safeDelete 尝试 $attempt 失败: $e');
         // 删除失败，等待后重试
       }
 

@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
-import 'package:path/path.dart' as p;
+import 'package:flutter/foundation.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../config/crypto.dart';
@@ -28,7 +27,8 @@ class ThumbnailService {
       );
 
       return thumbnailBytes;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] ThumbnailService.extractThumbnail: $e');
       return null;
     }
   }
@@ -55,7 +55,8 @@ class ThumbnailService {
       await thumbFile.writeAsBytes(encrypted);
 
       return thumbPath;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] ThumbnailService.generateAndEncryptThumbnail: $e');
       return null;
     }
   }
@@ -74,7 +75,8 @@ class ThumbnailService {
       final decrypted = CryptoService.decryptBytes(encrypted);
 
       return decrypted;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] ThumbnailService.loadThumbnail: $e');
       return null;
     }
   }
@@ -99,7 +101,8 @@ class ThumbnailService {
             decrypted[2] == 0x46; // 'G', 'I', 'F'
       }
       return false;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] ThumbnailService.isGifThumbnail: $e');
       return false;
     }
   }

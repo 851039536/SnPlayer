@@ -1,4 +1,7 @@
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
+
+import '../utils/file_utils.dart';
 
 /// 视频数据模型
 class VideoItem {
@@ -53,22 +56,13 @@ class VideoItem {
         final second = int.parse(datePart.substring(12, 14));
         return DateTime(year, month, day, hour, minute, second);
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] VideoItem.parseEncryptedAt: $e');
       // 解析失败返回当前时间
     }
     return DateTime.now();
   }
 
   /// 格式化文件大小为人可读字符串
-  String get formattedSize {
-    if (fileSize < 1024) {
-      return '$fileSize B';
-    } else if (fileSize < 1024 * 1024) {
-      return '${(fileSize / 1024).toStringAsFixed(1)} KB';
-    } else if (fileSize < 1024 * 1024 * 1024) {
-      return '${(fileSize / (1024 * 1024)).toStringAsFixed(1)} MB';
-    } else {
-      return '${(fileSize / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
-    }
-  }
+  String get formattedSize => FileUtils.formatFileSize(fileSize);
 }

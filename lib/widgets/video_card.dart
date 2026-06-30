@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 
 import '../models/video_item.dart';
@@ -13,22 +11,12 @@ class VideoCard extends StatelessWidget {
   final VideoItem video;
   final String? processingState;
   final VoidCallback onTap;
-  final VoidCallback? onPlay;
-  final VoidCallback? onDecrypt;
-  final VoidCallback? onRename;
-  final VoidCallback? onMove;
-  final VoidCallback? onDelete;
 
   const VideoCard({
     super.key,
     required this.video,
     this.processingState,
     required this.onTap,
-    this.onPlay,
-    this.onDecrypt,
-    this.onRename,
-    this.onMove,
-    this.onDelete,
   });
 
   @override
@@ -47,7 +35,7 @@ class VideoCard extends StatelessWidget {
             // 信息区域
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
+                  AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -57,10 +45,10 @@ class VideoCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w500,
-                    ),
+                          fontWeight: FontWeight.w500,
+                        ),
                   ),
-                  SizedBox(height: AppSpacing.xs),
+                  const SizedBox(height: AppSpacing.xs),
                   // 文件大小 + 时间
                   Row(
                     children: [
@@ -69,37 +57,39 @@ class VideoCard extends StatelessWidget {
                         size: 14,
                         color: colorScheme.onSurfaceVariant,
                       ),
-                      SizedBox(width: AppSpacing.xs),
+                      const SizedBox(width: AppSpacing.xs),
                       Expanded(
                         child: Text(
                           video.formattedSize,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                          ),
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (processingState != null) ...[
-                        SizedBox(width: AppSpacing.xs),
+                        const SizedBox(width: AppSpacing.xs),
                         _ProcessingBadge(state: processingState!),
                       ],
                     ],
                   ),
                   if (video.folderName != null) ...[
-                    SizedBox(height: AppSpacing.xs),
+                    const SizedBox(height: AppSpacing.xs),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.sm, vertical: 2),
+                          horizontal: AppSpacing.sm, vertical: 2),
                       decoration: BoxDecoration(
-                        color: colorScheme.secondaryContainer.withOpacity(0.4),
+                        color: colorScheme.secondaryContainer
+                            .withValues(alpha: 0.4),
                         borderRadius: BorderRadius.circular(AppRadius.xs),
                       ),
                       child: Text(
                         video.folderName!,
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: colorScheme.onSecondaryContainer,
-                        ),
+                              color: colorScheme.onSecondaryContainer,
+                            ),
                       ),
                     ),
                   ],
@@ -158,8 +148,8 @@ class VideoCard extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            colorScheme.primaryContainer.withOpacity(0.3),
-            colorScheme.secondaryContainer.withOpacity(0.3),
+            colorScheme.primaryContainer.withValues(alpha: 0.3),
+            colorScheme.secondaryContainer.withValues(alpha: 0.3),
           ],
         ),
       ),
@@ -167,7 +157,7 @@ class VideoCard extends StatelessWidget {
         child: Icon(
           Icons.video_library_rounded,
           size: 48,
-          color: colorScheme.onSurface.withOpacity(0.2),
+          color: colorScheme.onSurface.withValues(alpha: 0.2),
         ),
       ),
     );
@@ -186,12 +176,12 @@ class _ProcessingBadge extends StatelessWidget {
     final isError = state.contains('失败');
 
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.sm, vertical: 2),
+      padding:
+          const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 2),
       decoration: BoxDecoration(
         color: isError
-            ? colorScheme.errorContainer.withOpacity(0.8)
-            : colorScheme.primaryContainer.withOpacity(0.8),
+            ? colorScheme.errorContainer.withValues(alpha: 0.8)
+            : colorScheme.primaryContainer.withValues(alpha: 0.8),
         borderRadius: BorderRadius.circular(AppRadius.xs),
       ),
       child: Row(
@@ -207,16 +197,16 @@ class _ProcessingBadge extends StatelessWidget {
               ),
             )
           else
-            Icon(Icons.error_outline, size: 12,
-              color: colorScheme.onErrorContainer),
-          SizedBox(width: AppSpacing.xs),
+            Icon(Icons.error_outline,
+                size: 12, color: colorScheme.onErrorContainer),
+          const SizedBox(width: AppSpacing.xs),
           Text(
             state,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: isError
-                  ? colorScheme.onErrorContainer
-                  : colorScheme.onPrimaryContainer,
-            ),
+                  color: isError
+                      ? colorScheme.onErrorContainer
+                      : colorScheme.onPrimaryContainer,
+                ),
           ),
         ],
       ),

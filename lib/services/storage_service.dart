@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 
 import '../models/video_item.dart';
 import '../models/video_folder.dart';
@@ -82,7 +84,8 @@ class StorageService {
         fileSize: stat.size,
         encryptedAt: encryptedAt,
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] StorageService._fileToVideoItem: $e');
       return null;
     }
   }
@@ -155,7 +158,8 @@ class StorageService {
       }
 
       return true;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] StorageService.moveVideo: $e');
       return false;
     }
   }
@@ -168,7 +172,7 @@ class StorageService {
       if (parts.length < 3) {
         return false;
       }
-      parts[parts.length - 1] = '${newDisplayName}.enc';
+      parts[parts.length - 1] = '$newDisplayName.enc';
       final newEncName = parts.join('_');
 
       final dirPath = p.dirname(video.encPath);
@@ -181,7 +185,8 @@ class StorageService {
       }
 
       return true;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] StorageService.renameVideo: $e');
       return false;
     }
   }
@@ -201,7 +206,8 @@ class StorageService {
       final content = await file.readAsString();
       final List<dynamic> jsonList = json.decode(content);
       return jsonList.map((j) => VideoFolder.fromJson(j)).toList();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] StorageService.loadFolders: $e');
       return [];
     }
   }
@@ -214,7 +220,8 @@ class StorageService {
       final jsonList = folders.map((f) => f.toJson()).toList();
       await file.writeAsString(json.encode(jsonList));
       return true;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] StorageService.saveFolders: $e');
       return false;
     }
   }
@@ -244,7 +251,8 @@ class StorageService {
       await saveFolders(folders);
 
       return folder;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] StorageService.createFolder: $e');
       return null;
     }
   }
@@ -270,7 +278,8 @@ class StorageService {
       await saveFolders(folders);
 
       return true;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[SnPlayer] StorageService.deleteFolder: $e');
       return false;
     }
   }
@@ -357,12 +366,7 @@ class StorageService {
   }
 
   static String _generateShortUuid() {
-    // 生成 8 字符短 UUID
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    final buf = StringBuffer();
-    for (int i = 0; i < 8; i++) {
-      buf.write(chars[DateTime.now().microsecondsSinceEpoch % chars.length]);
-    }
-    return buf.toString();
+    // 使用 uuid v4 生成真正随机的 UUID，截取前 8 位作为短 ID
+    return const Uuid().v4().substring(0, 8);
   }
 }

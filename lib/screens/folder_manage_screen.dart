@@ -1,10 +1,9 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
 import '../theme/app_theme.dart';
+import '../utils/color_utils.dart';
 
 /// 文件夹管理页面（BottomSheet）
 ///
@@ -139,7 +138,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
 
   Widget _buildFolderRow(BuildContext context, FolderData folder) {
     final colorScheme = Theme.of(context).colorScheme;
-    final color = _parseColor(folder.color) ?? colorScheme.primary;
+    final color = ColorUtils.parseHexColor(folder.color) ?? colorScheme.primary;
 
     return Container(
       decoration: BoxDecoration(
@@ -215,7 +214,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
               Wrap(
                 spacing: AppSpacing.md,
                 children: _presetColors.map((color) {
-                  final parsed = _parseColor(color);
+                  final parsed = ColorUtils.parseHexColor(color);
                   return GestureDetector(
                     onTap: () {
                       setDialogState(() {
@@ -313,7 +312,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
           spacing: AppSpacing.lg,
           runSpacing: AppSpacing.lg,
           children: _presetColors.map((color) {
-            final parsed = _parseColor(color);
+            final parsed = ColorUtils.parseHexColor(color);
             final isSelected = folder.color == color;
             return GestureDetector(
               onTap: () async {
@@ -381,15 +380,6 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
     );
   }
 
-  Color? _parseColor(String hex) {
-    try {
-      final colorStr = hex.replaceAll('#', '');
-      if (colorStr.length == 6) {
-        return Color(int.parse('FF$colorStr', radix: 16));
-      }
-    } catch (_) {}
-    return null;
-  }
 }
 
 /// 文件夹数据（管理界面用）

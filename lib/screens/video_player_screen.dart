@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -31,6 +32,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _isLoading = true;
   String? _error;
   String? _tempPath;
+  Timer? _deleteTimer;
 
   @override
   void initState() {
@@ -39,6 +41,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> _initPlayer() async {
+    // 取消旧定时器，防止与之前的临时文件清理产生竞态
+    _deleteTimer?.cancel();
+    _deleteTimer = null;
+
     try {
       final cacheDir = await PathProviderService.getCacheDir();
       _tempPath = await CryptoService.decryptToTemp(widget.encPath, cacheDir);
@@ -56,18 +62,19 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         });
       }
 
-      // 30 秒后自动删除临时文件
+      // 30 秒后自动删除临时文件（使用 Timer 以获得可取消的引用）
       if (mounted) {
-        Future.delayed(
-          Duration(milliseconds: playCacheDeleteDelayMs),
+        _deleteTimer = Timer(
+          const Duration(milliseconds: playCacheDeleteDelayMs),
           () {
             if (_tempPath != null) {
-              SafeDeleteHelper.safeDelete(_tempPath!);
+              unawaited(_safeDeleteTempFile(_tempPath!));
             }
           },
         );
       }
     } catch (e) {
+      debugPrint('[SnPlayer] VideoPlayerScreen._initPlayer: $e');
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -77,12 +84,21 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
   }
 
+  Future<void> _safeDeleteTempFile(String path) async {
+    final ok = await SafeDeleteHelper.safeDelete(path);
+    if (!ok) {
+      debugPrint('[SnPlayer] VideoPlayerScreen: 临时文件删除失败 $path');
+    }
+  }
+
   @override
   void dispose() {
+    _deleteTimer?.cancel();
+    _deleteTimer = null;
     _controller?.dispose();
     // 离开页面时立即清理临时文件
     if (_tempPath != null) {
-      SafeDeleteHelper.safeDelete(_tempPath!);
+      unawaited(_safeDeleteTempFile(_tempPath!));
     }
     super.dispose();
   }
@@ -95,7 +111,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: colorScheme.surface.withOpacity(0.85),
+        backgroundColor: colorScheme.surface.withValues(alpha: 0.85),
         foregroundColor: colorScheme.onSurface,
         elevation: 0,
         title: Text(
@@ -115,12 +131,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           CircularProgressIndicator(
-            color: colorScheme.onSurface.withOpacity(0.7)),
-          SizedBox(height: AppSpacing.xl),
+            color: colorScheme.onSurface.withValues(alpha: 0.7)),
+          const SizedBox(height: AppSpacing.xl),
           Text(
             '正在解密视频...',
             style: TextStyle(
-              color: colorScheme.onSurface.withOpacity(0.7)),
+              color: colorScheme.onSurface.withValues(alpha: 0.7)),
           ),
         ],
       );
@@ -131,14 +147,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.error_outline, size: 48, color: colorScheme.error),
-          SizedBox(height: AppSpacing.xl),
+          const SizedBox(height: AppSpacing.xl),
           Text(
             _error!,
             style: TextStyle(
-              color: colorScheme.onSurface.withOpacity(0.7)),
+              color: colorScheme.onSurface.withValues(alpha: 0.7)),
             textAlign: TextAlign.center,
           ),
-          SizedBox(height: AppSpacing.xxxl),
+          const SizedBox(height: AppSpacing.xxxl),
           ElevatedButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('返回'),
@@ -174,7 +190,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 width: 64,
                 height: 64,
                 decoration: BoxDecoration(
-                  color: colorScheme.surface.withOpacity(0.4),
+                  color: colorScheme.surface.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(32),
                 ),
                 child: Icon(
@@ -219,7 +235,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
                 activeTrackColor: colorScheme.onSurface,
-                inactiveTrackColor: colorScheme.onSurface.withOpacity(0.15),
+                inactiveTrackColor: colorScheme.onSurface.withValues(alpha: 0.15),
                 thumbColor: colorScheme.onSurface,
               ),
               child: Slider(
@@ -232,7 +248,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
               ),
             ),
             Padding(
-              padding: EdgeInsets.fromLTRB(
+              padding: const EdgeInsets.fromLTRB(
                 AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -240,13 +256,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                   Text(
                     _formatDuration(value.position),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withOpacity(0.7),
+                      color: colorScheme.onSurface.withValues(alpha: 0.7),
                     ),
                   ),
                   Text(
                     _formatDuration(value.duration),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withOpacity(0.7),
+                      color: colorScheme.onSurface.withValues(alpha: 0.7),
                     ),
                   ),
                 ],

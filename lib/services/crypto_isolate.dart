@@ -1,18 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:pointycastle/api.dart';
-import 'package:pointycastle/block/aes.dart';
-import 'package:pointycastle/digests/sha256.dart';
-import 'package:pointycastle/key_derivators/api.dart';
-import 'package:pointycastle/key_derivators/pbkdf2.dart';
-import 'package:pointycastle/macs/hmac.dart';
-import 'package:pointycastle/stream/ctr.dart';
 
 import '../config/crypto.dart';
+import '../utils/crypto_utils.dart';
 
 // ═══════════════════════════════════════════════════════════
 // Isolate 后台加解密 Worker
@@ -51,6 +46,8 @@ void cryptoWorker(SendPort sendPort) {
       }
       progressPort?.send({'type': 'done'});
     } catch (e) {
+      // ignore: avoid_print (Isolate 环境下无法访问 flutter/foundation)
+      print('[SnPlayer] CryptoIsolate error: $e');
       progressPort?.send({'type': 'error', 'message': e.toString()});
     }
   });
@@ -60,8 +57,6 @@ void cryptoWorker(SendPort sendPort) {
 // Isolate 内部加解密实现
 // ═══════════════════════════════════════════════════════════
 
-final Map<String, Uint8List> _isoKeyCache = {};
-
 Future<void> _encryptFileInIsolate(
   String inputPath,
   String outputPath,
@@ -69,10 +64,10 @@ Future<void> _encryptFileInIsolate(
   SendPort? progressPort,
 ) async {
   final passwordBytes = Uint8List.fromList(utf8.encode(password));
-  final iv = _isoRandomBytes(ivLength);
-  final salt = _isoRandomBytes(saltLength);
-  final key = _isoDeriveKey(passwordBytes, salt);
-  final cipher = _isoCreateCipher(key, iv);
+  final iv = CryptoUtils.generateRandomBytes(ivLength);
+  final salt = CryptoUtils.generateRandomBytes(saltLength);
+  final key = CryptoUtils.deriveKeyFromPassword(passwordBytes, salt);
+  final cipher = CryptoUtils.createCtrCipher(key, iv);
 
   await _processFile(inputPath, outputPath, cipher,
     headerBuilder: () {
@@ -106,8 +101,8 @@ Future<void> _decryptFileInIsolate(
   final iv = Uint8List.sublistView(header, 0, ivLength);
   final salt = Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
 
-  final key = _isoDeriveKey(passwordBytes, salt);
-  final cipher = _isoCreateCipher(key, iv);
+  final key = CryptoUtils.deriveKeyFromPassword(passwordBytes, salt);
+  final cipher = CryptoUtils.createCtrCipher(key, iv);
 
   await _processFile(inputPath, outputPath, cipher,
     headerBuilder: null,
@@ -190,38 +185,4 @@ Future<void> _processFile(
   }
 }
 
-// --- Isolate 内部工具函数 ---
 
-Uint8List _isoDeriveKey(Uint8List passwordBytes, Uint8List salt) {
-  final cacheKey = base64.encode(salt);
-  final cached = _isoKeyCache[cacheKey];
-  if (cached != null) {
-    return cached;
-  }
-
-  final hmac = HMac(SHA256Digest(), 64);
-  final derivator = PBKDF2KeyDerivator(hmac);
-  derivator.init(Pbkdf2Parameters(salt, pbkdf2Iterations, keyLength));
-
-  final key = derivator.process(passwordBytes);
-  _isoKeyCache[cacheKey] = key;
-  return key;
-}
-
-StreamCipher _isoCreateCipher(Uint8List key, Uint8List iv) {
-  final cipher = CTRStreamCipher(AESEngine())
-    ..init(
-      true,
-      ParametersWithIV(KeyParameter(key), iv),
-    );
-  return cipher;
-}
-
-Uint8List _isoRandomBytes(int length) {
-  final random = Random.secure();
-  final bytes = Uint8List(length);
-  for (int i = 0; i < length; i++) {
-    bytes[i] = random.nextInt(256);
-  }
-  return bytes;
-}

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/video_folder.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
+import '../utils/color_utils.dart';
 
 /// 文件夹标签栏组件
 ///
@@ -45,7 +46,7 @@ class FolderTabs extends StatelessWidget {
 
                 // 文件夹标签
                 ...folders.map((folder) {
-                  final color = _parseColor(folder.color) ?? colorScheme.primary;
+                  final color = ColorUtils.parseHexColor(folder.color) ?? colorScheme.primary;
                   return _buildTab(
                     context,
                     label: folder.displayName,
@@ -92,7 +93,7 @@ class FolderTabs extends StatelessWidget {
       onTap: onTap,
       onLongPress: onLongPress,
       child: Container(
-        margin: EdgeInsets.only(
+        margin: const EdgeInsets.only(
           right: AppSpacing.md,
           top: AppSpacing.sm,
           bottom: AppSpacing.sm,
@@ -101,8 +102,8 @@ class FolderTabs extends StatelessWidget {
           horizontal: AppSpacing.xl, vertical: AppSpacing.md),
         decoration: BoxDecoration(
           color: isSelected
-              ? color.withOpacity(0.2)
-              : colorScheme.surfaceContainerHighest.withOpacity(0.4),
+              ? color.withValues(alpha: 0.2)
+              : colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(AppRadius.xxl),
           border: Border.all(
             color: isSelected ? color : Colors.transparent,
@@ -122,16 +123,4 @@ class FolderTabs extends StatelessWidget {
     );
   }
 
-  /// 解析十六进制颜色字符串
-  Color? _parseColor(String hex) {
-    try {
-      final colorStr = hex.replaceAll('#', '');
-      if (colorStr.length == 6) {
-        return Color(int.parse('FF$colorStr', radix: 16));
-      } else if (colorStr.length == 8) {
-        return Color(int.parse(colorStr, radix: 16));
-      }
-    } catch (_) {}
-    return null;
-  }
 }

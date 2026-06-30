@@ -2,19 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:math';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:pointycastle/api.dart';
-import 'package:pointycastle/block/aes.dart';
-import 'package:pointycastle/digests/sha256.dart';
-import 'package:pointycastle/key_derivators/api.dart';
-import 'package:pointycastle/key_derivators/pbkdf2.dart';
-import 'package:pointycastle/macs/hmac.dart';
-import 'package:pointycastle/stream/ctr.dart';
 
 import '../config/crypto.dart';
+import '../utils/crypto_utils.dart';
 import 'crypto_isolate.dart';
 
 /// AES-256-CTR 加密/解密核心服务
@@ -32,12 +26,8 @@ class CryptoService {
       return cached;
     }
 
-    final hmac = HMac(SHA256Digest(), 64);
-    final derivator = PBKDF2KeyDerivator(hmac);
-    derivator.init(Pbkdf2Parameters(salt, pbkdf2Iterations, keyLength));
-
-    final key = derivator.process(passwordBytes);
-    _keyCache[cacheKey] = key;
+    final key = CryptoUtils.deriveKeyFromPassword(passwordBytes, salt);
+    _addToCache(cacheKey, key);
     return key;
   }
 
@@ -77,6 +67,9 @@ class CryptoService {
     );
   }
 
+  /// Isolate 最大运行时间（5 分钟），超时后强制终止
+  static const Duration _isolateTimeout = Duration(minutes: 5);
+
   /// 在后台 Isolate 中执行加解密，通过 SendPort 接收进度事件
   static Future<void> _runInIsolate({
     required String command,
@@ -104,10 +97,14 @@ class CryptoService {
             onProgress?.call(value);
           }
         } else if (type == 'done') {
-          if (!completer.isCompleted) { completer.complete(); }
+          if (!completer.isCompleted) {
+            completer.complete();
+          }
         } else if (type == 'error') {
           final message = event['message'] as String? ?? 'Unknown error';
-          if (!completer.isCompleted) { completer.completeError(Exception(message)); }
+          if (!completer.isCompleted) {
+            completer.completeError(Exception(message));
+          }
         }
       }
     });
@@ -121,11 +118,25 @@ class CryptoService {
         'progressPort': progressPort.sendPort,
       });
 
-      await completer.future;
+      // 添加超时机制，防止 worker 崩溃后永久挂起
+      await completer.future.timeout(_isolateTimeout, onTimeout: () {
+        throw TimeoutException(
+            'Isolate $command 操作超时 (${_isolateTimeout.inSeconds}s): $inputPath');
+      });
+    } catch (e) {
+      debugPrint('[SnPlayer] CryptoService._runInIsolate: $e');
+      rethrow;
     } finally {
       progressPort.close();
       receivePort.close();
-      isolate.kill(priority: Isolate.immediate);
+      // 优雅关闭：先尝试 beforeNextEvent，失败后再 immediate
+      try {
+        isolate.kill(priority: Isolate.beforeNextEvent);
+      } catch (e) {
+        debugPrint(
+            '[SnPlayer] CryptoService._runInIsolate: Isolate.kill failed $e');
+        isolate.kill(priority: Isolate.immediate);
+      }
     }
   }
 
@@ -154,7 +165,8 @@ class CryptoService {
     encrypted.setAll(0, iv);
     encrypted.setAll(ivLength, salt);
 
-    _processCtrBlock(cipher, data, encrypted, data.length, dstOffset: headerSize);
+    _processCtrBlock(cipher, data, encrypted, data.length,
+        dstOffset: headerSize);
 
     return encrypted;
   }
@@ -181,12 +193,7 @@ class CryptoService {
 
   /// 创建 AES-256-CTR cipher 并初始化
   static StreamCipher _createCipher(Uint8List key, Uint8List iv) {
-    final cipher = CTRStreamCipher(AESEngine())
-      ..init(
-        true, // forEncryption（CTR 模式加密解密相同）
-        ParametersWithIV(KeyParameter(key), iv),
-      );
-    return cipher;
+    return CryptoUtils.createCtrCipher(key, iv);
   }
 
   /// 处理一个 CTR 块（原地加解密，因为 CTR 是异或流）
@@ -204,19 +211,22 @@ class CryptoService {
 
   /// 生成加密安全的随机字节
   static Uint8List _generateRandomBytes(int length) {
-    final random = Random.secure();
-    final bytes = Uint8List(length);
-    for (int i = 0; i < length; i++) {
-      bytes[i] = random.nextInt(256);
-    }
-    return bytes;
+    return CryptoUtils.generateRandomBytes(length);
   }
 
   // --- 密钥缓存 ---
 
   /// PBKDF2 派生密钥缓存，以 salt 的 base64 编码为 key
   /// 密码固定，相同 salt 的密钥可复用，避免重复的 100K 迭代开销
+  /// LRU 上限 100 条（32B × 100 = 3.2KB，可忽略不计）
   static final Map<String, Uint8List> _keyCache = {};
+  static const int _maxKeyCacheSize = 100;
+
+  static void _addToCache(String key, Uint8List value) {
+    if (_keyCache.length >= _maxKeyCacheSize) {
+      // 删除最早插入的条目（Dart Map 保持插入顺序）
+      _keyCache.remove(_keyCache.keys.first);
+    }
+    _keyCache[key] = value;
+  }
 }
-
-

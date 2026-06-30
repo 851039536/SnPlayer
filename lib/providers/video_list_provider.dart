@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
-import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../models/video_item.dart';
 import '../config/crypto.dart';
@@ -20,7 +19,7 @@ import '../utils/cancellable.dart';
 /// 管理视频列表的 CRUD、缩略图分批加载、存储统计
 class VideoListProvider extends ChangeNotifier {
   List<VideoItem> _videos = [];
-  Map<String, String> _processingState = {}; // id -> status text
+  final Map<String, String> _processingState = {}; // id -> status text
   final CancellationToken _thumbnailToken = CancellationToken();
 
   List<VideoItem> get videos => _videos;
@@ -77,17 +76,17 @@ class VideoListProvider extends ChangeNotifier {
 
         // 生成加密缩略图
         await ThumbnailService.generateAndEncryptThumbnail(file.path!, thumbPath);
-
-        // 重新扫描视频列表
-        await loadVideos();
-
-        _removeProcessingState(videoId);
       } catch (e) {
+        debugPrint('[SnPlayer] VideoListProvider.pickAndEncryptVideos: $e');
         _setProcessingState(videoId, '加密失败');
         await Future.delayed(const Duration(seconds: 3));
+      } finally {
         _removeProcessingState(videoId);
       }
     }
+
+    // 循环结束后只扫描一次
+    await loadVideos();
   }
 
   /// 解密视频到导出目录
@@ -109,13 +108,14 @@ class VideoListProvider extends ChangeNotifier {
         },
       );
 
-      _removeProcessingState(videoId);
       return true;
     } catch (e) {
+      debugPrint('[SnPlayer] VideoListProvider.decryptAndExport: $e');
       _setProcessingState(videoId, '解密失败');
       await Future.delayed(const Duration(seconds: 3));
-      _removeProcessingState(videoId);
       return false;
+    } finally {
+      _removeProcessingState(videoId);
     }
   }
 
@@ -133,7 +133,9 @@ class VideoListProvider extends ChangeNotifier {
   Future<bool> renameVideo(VideoItem video, String newName) async {
     final success = await StorageService.renameVideo(video, newName);
     if (success) {
-      await loadVideos();
+      // 直接更新现有对象，避免全量重扫
+      video.displayName = newName;
+      notifyListeners();
     }
     return success;
   }
@@ -163,8 +165,13 @@ class VideoListProvider extends ChangeNotifier {
       await Future.wait(
         batch.map((video) async {
           try {
-            video.coverData = await ThumbnailService.loadThumbnail(video.thumbPath);
-          } catch (_) {
+            // 单个缩略图加载添加 10 秒超时，防止磁盘 I/O 阻塞
+            video.coverData = await Future.any([
+              ThumbnailService.loadThumbnail(video.thumbPath),
+              Future.delayed(const Duration(seconds: 10), () => null),
+            ]);
+          } catch (e) {
+            debugPrint('[SnPlayer] VideoListProvider.loadThumbnails: $e');
             video.coverData = null;
           }
         }),
