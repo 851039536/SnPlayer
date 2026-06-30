@@ -16,11 +16,17 @@ const int saltLength = 16;
 /// 加密文件头总长度（IV + Salt + 保留字段 = 64 字节）
 const int headerSize = 64;
 
-/// 保留字段长度（32 字节，全零）
-const int reservedSize = 32;
+/// 格式版本号（v2: 0x02）
+const int versionByte = 0x02;
 
-/// PBKDF2 迭代次数
-const int pbkdf2Iterations = 100000;
+/// 版本号在文件头中的偏移量
+const int versionOffset = 32;
+
+/// 保留字段长度（31 字节，全零）
+const int reservedSize = 31;
+
+/// PBKDF2 迭代次数（v2: 1 万次）
+const int pbkdf2Iterations = 10000;
 
 /// 流式加解密缓冲区大小（4MB）
 /// 从 512KB 提升至 4MB，减少系统调用次数约 87.5%，提升 I/O 吞吐

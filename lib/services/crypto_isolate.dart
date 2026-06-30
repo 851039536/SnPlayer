@@ -89,6 +89,7 @@ Future<void> _encryptFileInIsolate(
       final header = Uint8List(headerSize);
       header.setAll(0, iv);
       header.setAll(ivLength, salt);
+      header[versionOffset] = versionByte; // v2 格式版本号
       return header;
     },
     startOffset: 0,
@@ -115,6 +116,7 @@ Future<void> _decryptFileInIsolate(
 
   final iv = Uint8List.sublistView(header, 0, ivLength);
   final salt = Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
+  _validateVersion(header);
 
   final key = CryptoUtils.deriveKeyFromPassword(passwordBytes, salt);
   final cipher = CryptoUtils.createCtrCipher(key, iv);
@@ -145,6 +147,7 @@ Future<void> _decryptFilePartialInIsolate(
 
   final iv = Uint8List.sublistView(header, 0, ivLength);
   final salt = Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
+  _validateVersion(header);
 
   final key = CryptoUtils.deriveKeyFromPassword(passwordBytes, salt);
   final cipher = CryptoUtils.createCtrCipher(key, iv);
@@ -155,6 +158,17 @@ Future<void> _decryptFilePartialInIsolate(
     progressPort: progressPort,
     maxBytes: maxBytes,
   );
+}
+
+/// 校验文件头中的格式版本号，非 v2 格式拒绝解密
+void _validateVersion(Uint8List header) {
+  final ver = header[versionOffset];
+  if (ver != versionByte) {
+    throw FormatException(
+      '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
+      '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
+    );
+  }
 }
 
 /// 双缓冲 I/O + CTR 流式处理核心

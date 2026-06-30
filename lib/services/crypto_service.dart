@@ -302,6 +302,7 @@ class CryptoService {
     final encrypted = Uint8List(headerSize + data.length);
     encrypted.setAll(0, iv);
     encrypted.setAll(ivLength, salt);
+    encrypted[versionOffset] = versionByte; // v2 格式版本号
 
     _processCtrBlock(cipher, data, encrypted, data.length,
         dstOffset: headerSize);
@@ -315,6 +316,15 @@ class CryptoService {
 
     final iv = encrypted.sublist(0, ivLength);
     final salt = encrypted.sublist(saltOffset, saltOffset + saltLength);
+
+    // 校验格式版本号
+    final ver = encrypted[versionOffset];
+    if (ver != versionByte) {
+      throw FormatException(
+        '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
+        '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
+      );
+    }
 
     final key = deriveKey(passwordBytes, salt);
     final cipher = _createCipher(key, iv);
@@ -353,6 +363,15 @@ class CryptoService {
 
     final iv = Uint8List.sublistView(header, 0, ivLength);
     final salt = Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
+
+    // 校验格式版本号
+    final ver = header[versionOffset];
+    if (ver != versionByte) {
+      throw FormatException(
+        '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
+        '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
+      );
+    }
 
     // 2. 派生密钥
     final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
