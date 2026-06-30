@@ -353,9 +353,11 @@ class CryptoService {
     final keyBase64 = base64.encode(key);
 
     // 3. 计算分块数和每块边界
+    // chunkSize 必须 16 字节对齐，确保 CTR counter 递推精确
     final cipherDataSize = fileSize - headerSize;
     final isolateCount = _getChunkCount(cipherDataSize);
-    final chunkSize = cipherDataSize ~/ isolateCount;
+    final rawChunkSize = cipherDataSize ~/ isolateCount;
+    final chunkSize = (rawChunkSize ~/ aesBlockSize) * aesBlockSize;
 
     debugPrint('[SnPlayer] 并行解密: 文件=${fileSize}B, 密文=${cipherDataSize}B, '
         '分$isolateCount块, 每块≈${(chunkSize / 1024 / 1024).toStringAsFixed(1)}MB');
