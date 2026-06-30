@@ -45,22 +45,15 @@ class VideoItem {
   /// 从文件名解析加密时间
   static DateTime parseEncryptedAt(String fileName) {
     try {
-      // 文件名格式: encrypted_yyyyMMddHHmmssfff_原始名称.enc
       final base = fileName.replaceAll('.enc', '');
-      final parts = base.split('_');
-      if (parts.length >= 2) {
-        final datePart = parts[1];
-        final year = int.parse(datePart.substring(0, 4));
-        final month = int.parse(datePart.substring(4, 6));
-        final day = int.parse(datePart.substring(6, 8));
-        final hour = int.parse(datePart.substring(8, 10));
-        final minute = int.parse(datePart.substring(10, 12));
-        final second = int.parse(datePart.substring(12, 14));
-        return DateTime(year, month, day, hour, minute, second);
+      final match = RegExp(r'_(\d{8})$').firstMatch(base);
+      if (match != null) {
+        final d = match.group(1)!;
+        return DateTime(int.parse(d.substring(0, 4)),
+            int.parse(d.substring(4, 6)), int.parse(d.substring(6, 8)));
       }
     } catch (e) {
       debugPrint('[SnPlayer] VideoItem.parseEncryptedAt: $e');
-      // 解析失败返回当前时间
     }
     return DateTime.now();
   }

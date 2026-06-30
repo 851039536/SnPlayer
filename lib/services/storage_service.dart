@@ -91,32 +91,24 @@ class StorageService {
   }
 
   /// 从文件名解析显示名称
+  /// 格式: 原始名称_yyyyMMdd.enc → 原始名称
   static String _parseDisplayName(String fileName) {
-    // 文件名格式: encrypted_yyyyMMddHHmmssfff_原始名称.enc
     final baseName = fileName.replaceAll('.enc', '');
-    final parts = baseName.split('_');
-    if (parts.length >= 3) {
-      return parts.sublist(2).join('_');
-    }
-    return baseName;
+    return baseName.replaceFirst(RegExp(r'_\d{8}$'), '');
   }
 
   /// 生成加密文件命名
-  /// 格式: encrypted_yyyyMMddHHmmssfff_原始名称
+  /// 格式: 原始名称_yyyyMMdd
   static String generateEncryptedFileName(String originalName) {
     final now = DateTime.now();
-    final timestamp =
+    final dateStr =
         '${now.year}${now.month.toString().padLeft(2, '0')}'
-        '${now.day.toString().padLeft(2, '0')}'
-        '${now.hour.toString().padLeft(2, '0')}'
-        '${now.minute.toString().padLeft(2, '0')}'
-        '${now.second.toString().padLeft(2, '0')}'
-        '${now.millisecond.toString().padLeft(3, '0')}';
+        '${now.day.toString().padLeft(2, '0')}';
 
     // 去除原始名称中的扩展名
     final baseName = p.basenameWithoutExtension(originalName);
 
-    return 'encrypted_${timestamp}_$baseName';
+    return '${baseName}_$dateStr';
   }
 
   /// 构建加密视频的完整输出路径
@@ -168,12 +160,10 @@ class StorageService {
   static Future<bool> renameVideo(VideoItem video, String newDisplayName) async {
     try {
       final oldEncName = p.basename(video.encPath);
-      final parts = oldEncName.split('_');
-      if (parts.length < 3) {
-        return false;
-      }
-      parts[parts.length - 1] = '$newDisplayName.enc';
-      final newEncName = parts.join('_');
+      // 提取日期后缀 _yyyyMMdd
+      final dateMatch = RegExp(r'_(\d{8})\.enc$').firstMatch(oldEncName);
+      final dateSuffix = dateMatch != null ? '_${dateMatch.group(1)}' : '';
+      final newEncName = '$newDisplayName$dateSuffix.enc';
 
       final dirPath = p.dirname(video.encPath);
       final newEncPath = p.join(dirPath, newEncName);

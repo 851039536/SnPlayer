@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../models/video_item.dart';
 import '../providers/video_list_provider.dart';
 import '../providers/folder_provider.dart';
+import '../services/crypto_service.dart';
 import '../services/permission_service.dart';
+import '../services/path_provider_service.dart';
 import '../utils/file_utils.dart';
 import '../widgets/video_card.dart';
 import '../widgets/folder_tabs.dart';
@@ -29,6 +33,8 @@ class VideoListScreen extends StatefulWidget {
 }
 
 class _VideoListScreenState extends State<VideoListScreen> {
+  static const _fileChannel = MethodChannel('com.snplayer.sn_player/file');
+
   bool _hasPermission = false;
   bool _isInitializing = true;
 
@@ -359,6 +365,13 @@ class _VideoListScreenState extends State<VideoListScreen> {
           color: colorScheme.primary,
           onTap: () => _playVideo(video),
         ),
+        // 第三方播放
+        ActionSheetItem(
+          icon: Icons.open_in_new_rounded,
+          label: '第三方播放',
+          color: AppColors.warning,
+          onTap: () => _playExternal(video),
+        ),
         // 解密导出
         ActionSheetItem(
           icon: Icons.file_download_rounded,
@@ -399,6 +412,35 @@ class _VideoListScreenState extends State<VideoListScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _playExternal(VideoItem video) async {
+    try {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+
+      // 解密到 UnLockVideo 目录
+      final unlockDir = await PathProviderService.getUnlockVideoDir();
+      await Directory(unlockDir).create(recursive: true);
+      final tempPath = '${unlockDir}/${video.displayName}.mp4';
+      await CryptoService.decryptFile(video.encPath, tempPath);
+
+      if (mounted) { Navigator.pop(context); }
+
+      // 调用 Android 原生打开文件
+      await _fileChannel.invokeMethod('openFile', {'path': tempPath});
+    } catch (e) {
+      if (mounted) { Navigator.pop(context); }
+      debugPrint('[SnPlayer] _playExternal: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('打开失败，请检查是否安装了播放器')),
+        );
+      }
+    }
   }
 
   Future<void> _decryptVideo(VideoItem video, VideoListProvider provider) async {
