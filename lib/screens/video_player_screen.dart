@@ -107,8 +107,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
       appBar: _buildAppBar(colorScheme),
-      body: Center(
-        child: _buildContent(colorScheme),
+      body: SafeArea(
+        top: false,
+        child: Center(
+          child: _buildContent(colorScheme),
+        ),
       ),
     );
   }
@@ -147,7 +150,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.error_outline, size: 48, color: Colors.white70),
+          const Icon(Icons.error_outline, size: 48, color: Colors.white70),
           const SizedBox(height: AppSpacing.xl),
           Text(
             _error!,
