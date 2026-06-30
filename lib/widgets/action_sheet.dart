@@ -40,7 +40,7 @@ class ActionSheet extends StatelessWidget {
     return showModalBottomSheet(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-      shape: RoundedRectangleBorder(
+      shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(AppRadius.xxl)),
       ),
@@ -66,7 +66,7 @@ class ActionSheet extends StatelessWidget {
                 width: 32,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: colorScheme.onSurfaceVariant.withOpacity(0.4),
+                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -91,7 +91,7 @@ class ActionSheet extends StatelessWidget {
             ...items.map((item) => _buildItem(context, item)),
 
             // 取消按钮
-            SizedBox(height: AppSpacing.md),
+            const SizedBox(height: AppSpacing.md),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
               child: SizedBox(
@@ -131,7 +131,7 @@ class ActionSheet extends StatelessWidget {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: (item.color ?? colorScheme.primary).withOpacity(0.1),
+                color: (item.color ?? colorScheme.primary).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(AppRadius.sm + 4),
               ),
               child: Icon(
@@ -140,7 +140,7 @@ class ActionSheet extends StatelessWidget {
                 size: 22,
               ),
             ),
-            SizedBox(width: AppSpacing.xl),
+            const SizedBox(width: AppSpacing.xl),
             Text(
               item.label,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(

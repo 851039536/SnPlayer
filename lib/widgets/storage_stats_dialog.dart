@@ -36,7 +36,7 @@ class StorageStatsDialog extends StatelessWidget {
       title: Row(
         children: [
           Icon(Icons.storage_rounded, color: colorScheme.primary),
-          SizedBox(width: 10),
+          const SizedBox(width: 10),
           const Text('存储统计'),
         ],
       ),
@@ -51,7 +51,7 @@ class StorageStatsDialog extends StatelessWidget {
             size: encSize,
             color: colorScheme.primary,
           ),
-          SizedBox(height: AppSpacing.lg),
+          const SizedBox(height: AppSpacing.lg),
           _buildStatRow(
             context,
             icon: Icons.image_rounded,
@@ -60,7 +60,7 @@ class StorageStatsDialog extends StatelessWidget {
             size: tencSize,
             color: AppColors.success,
           ),
-          SizedBox(height: AppSpacing.lg),
+          const SizedBox(height: AppSpacing.lg),
           _buildStatRow(
             context,
             icon: Icons.cached_rounded,
@@ -69,9 +69,9 @@ class StorageStatsDialog extends StatelessWidget {
             size: cacheSize,
             color: AppColors.warning,
           ),
-          SizedBox(height: AppSpacing.xl),
+          const SizedBox(height: AppSpacing.xl),
           Divider(color: colorScheme.outlineVariant),
-          SizedBox(height: AppSpacing.md),
+          const SizedBox(height: AppSpacing.md),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -116,12 +116,12 @@ class StorageStatsDialog extends StatelessWidget {
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(AppRadius.md),
           ),
           child: Icon(icon, color: color, size: 20),
         ),
-        SizedBox(width: AppSpacing.lg),
+        const SizedBox(width: AppSpacing.lg),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

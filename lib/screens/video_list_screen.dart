@@ -80,7 +80,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const CircularProgressIndicator(),
-              SizedBox(height: AppSpacing.xl),
+              const SizedBox(height: AppSpacing.xl),
               Text('正在初始化...',
                 style: TextStyle(color: colorScheme.onSurfaceVariant),
               ),
@@ -100,20 +100,20 @@ class _VideoListScreenState extends State<VideoListScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(Icons.folder_off_rounded, size: 72,
-                  color: colorScheme.onSurfaceVariant.withOpacity(0.5)),
-                SizedBox(height: AppSpacing.xxxl),
+                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),
+                const SizedBox(height: AppSpacing.xxxl),
                 Text('需要存储权限才能访问视频文件',
                   style: Theme.of(context).textTheme.titleMedium,
                   textAlign: TextAlign.center,
                 ),
-                SizedBox(height: AppSpacing.md),
+                const SizedBox(height: AppSpacing.md),
                 Text('请在设置中授予存储权限',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
                   textAlign: TextAlign.center,
                 ),
-                SizedBox(height: AppSpacing.xxxl),
+                const SizedBox(height: AppSpacing.xxxl),
                 FilledButton.icon(
                   onPressed: _initApp,
                   icon: const Icon(Icons.security_rounded),
@@ -204,20 +204,20 @@ class _VideoListScreenState extends State<VideoListScreen> {
                 children: [
                   Icon(Icons.video_library_outlined, size: 64,
                     color: Theme.of(context)
-                        .colorScheme.onSurfaceVariant.withOpacity(0.3)),
-                  SizedBox(height: AppSpacing.xl),
+                        .colorScheme.onSurfaceVariant.withValues(alpha: 0.3)),
+                  const SizedBox(height: AppSpacing.xl),
                   Text(
                     '还没有加密视频',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  SizedBox(height: AppSpacing.md),
+                  const SizedBox(height: AppSpacing.md),
                   Text(
                     '点击右下角 + 按钮开始加密',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context)
-                          .colorScheme.onSurfaceVariant.withOpacity(0.6),
+                          .colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
                     ),
                   ),
                 ],
@@ -276,12 +276,12 @@ class _VideoListScreenState extends State<VideoListScreen> {
         return GestureDetector(
           onTap: _showStorageStats,
           child: Container(
-            margin: EdgeInsets.fromLTRB(
+            margin: const EdgeInsets.fromLTRB(
               AppSpacing.xl, 0, AppSpacing.xl, AppSpacing.md),
-            padding: EdgeInsets.symmetric(
+            padding: const EdgeInsets.symmetric(
               horizontal: AppSpacing.xl, vertical: 10),
             decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerHigh.withOpacity(0.9),
+              color: colorScheme.surfaceContainerHigh.withValues(alpha: 0.9),
               borderRadius: BorderRadius.circular(AppRadius.xl),
               border: Border.all(color: colorScheme.outlineVariant),
             ),
@@ -291,7 +291,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
                 Icon(Icons.videocam_rounded,
                   size: AppSpacing.xl,
                   color: colorScheme.primary),
-                SizedBox(width: AppSpacing.sm),
+                const SizedBox(width: AppSpacing.sm),
                 Text(
                   '${videos.length} 个加密视频 · ${FileUtils.formatFileSize(totalSize)}',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
