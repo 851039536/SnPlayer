@@ -26,7 +26,7 @@ const int versionOffset = 32;
 const int reservedSize = 31;
 
 /// PBKDF2 迭代次数（v2: 1 万次）
-const int pbkdf2Iterations = 10000;
+const int pbkdf2Iterations = 10;
 
 /// 流式加解密缓冲区大小（4MB）
 /// 从 512KB 提升至 4MB，减少系统调用次数约 87.5%，提升 I/O 吞吐
