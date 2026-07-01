@@ -270,6 +270,43 @@ class CryptoService {
     return tempPath;
   }
 
+  /// 读取加密文件元信息（IV + Salt + 派生密钥 + 文件大小）
+  ///
+  /// 供 [StreamingDecryptProxy] 初始化使用，一次性读取文件头并派生密钥。
+  /// 密钥派生走 [deriveKey] 缓存，相同 salt 的重复调用 O(1)。
+  static Future<EncryptedFileInfo> getEncryptedFileInfo(String encPath) async {
+    final inputFile = File(encPath);
+    final raf = await inputFile.open(mode: FileMode.read);
+    final header = Uint8List(headerSize);
+    await raf.readInto(header, 0, headerSize);
+    final encFileSize = await raf.length();
+    await raf.close();
+
+    final iv = Uint8List.sublistView(header, 0, ivLength);
+    final salt =
+        Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
+
+    // 校验格式版本号
+    final ver = header[versionOffset];
+    if (ver != versionByte) {
+      throw FormatException(
+        '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
+        '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
+      );
+    }
+
+    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
+    final key = deriveKey(passwordBytes, salt);
+
+    return EncryptedFileInfo(
+      iv: Uint8List.fromList(iv),
+      salt: Uint8List.fromList(salt),
+      key: key,
+      decryptedSize: encFileSize - headerSize,
+      encFileSize: encFileSize,
+    );
+  }
+
 
   /// 加密数据块（用于缩略图等内存数据）
   static Future<Uint8List> encryptBytes(Uint8List data) async {
@@ -761,4 +798,21 @@ class CryptoService {
     }
     _keyCache[key] = value;
   }
+}
+
+/// 加密文件元信息（代理初始化时一次性读取）
+class EncryptedFileInfo {
+  final Uint8List iv;
+  final Uint8List salt;
+  final Uint8List key;
+  final int decryptedSize;
+  final int encFileSize;
+
+  const EncryptedFileInfo({
+    required this.iv,
+    required this.salt,
+    required this.key,
+    required this.decryptedSize,
+    required this.encFileSize,
+  });
 }

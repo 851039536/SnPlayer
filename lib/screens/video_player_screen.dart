@@ -6,14 +6,19 @@ import 'package:video_player/video_player.dart';
 import '../services/crypto_service.dart';
 import '../services/safe_delete_helper.dart';
 import '../services/path_provider_service.dart';
+import '../services/playback_cache_manager.dart';
+import '../services/streaming_decrypt_proxy.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/player/player_gesture.dart';
 import '../widgets/player/player_controls.dart';
 
 /// 视频播放页面
 ///
-/// 内置播放器，解密到临时缓存后播放，退出页面时自动清理临时文件。
-/// 大文件（≥64MB）自动启用并行分块解密加速。
+/// 播放策略（三段式，逐级降级）：
+/// 1. 磁盘缓存命中 → 直接播放缓存文件（零解密等待）
+/// 2. 流式解密代理 → 按需 Range 解密，秒级起播（首次播放）
+/// 3. 全量解密回退 → 代理异常时使用原有 decryptToTemp 路径
+///
 /// 支持手势控制（双击跳过、滑动 seek）、控制按钮、倍速等功能。
 class VideoPlayerScreen extends StatefulWidget {
   final String encPath;
@@ -35,6 +40,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   String? _error;
   String? _tempPath;
 
+  /// 流式解密代理（仅在使用代理播放时非 null）
+  StreamingDecryptProxy? _proxy;
+
+  /// 标记当前播放源是否为代理（dispose 时需停止代理）
+  bool _usingProxy = false;
+
+  /// 标记当前播放源是否为缓存文件（dispose 时不删除）
+  bool _usingCache = false;
+
   bool _isFullscreen = false;
 
   @override
@@ -46,20 +60,37 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   Future<void> _initPlayer() async {
     try {
       final cacheDir = await PathProviderService.getCacheDir();
-      _tempPath = await CryptoService.decryptToTemp(widget.encPath, cacheDir);
 
-      _controller = VideoPlayerController.file(
-        File(_tempPath!),
+      // ── 阶段 1：检查磁盘缓存 ──
+      final cachedFile = await PlaybackCacheManager.getCachedFile(
+        widget.encPath,
+        cacheDir,
       );
-
-      await _controller!.initialize();
-      await _controller!.play();
-
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
+      if (cachedFile != null) {
+        debugPrint('[SnPlayer] VideoPlayerScreen: 磁盘缓存命中，直接播放');
+        _tempPath = cachedFile;
+        _usingCache = true;
+        _controller = VideoPlayerController.file(File(cachedFile));
+        await _controller!.initialize();
+        await _controller!.play();
+        _setLoading(false);
+        return;
       }
+
+      // ── 阶段 2：流式解密代理 ──
+      try {
+        await _initWithProxy(cacheDir);
+        return;
+      } catch (e) {
+        debugPrint('[SnPlayer] VideoPlayerScreen: 流式代理失败，降级全量解密: $e');
+        // 清理代理资源
+        await _proxy?.stop();
+        _proxy = null;
+        _usingProxy = false;
+      }
+
+      // ── 阶段 3：降级全量解密 ──
+      await _initWithFullDecrypt(cacheDir);
     } catch (e) {
       debugPrint('[SnPlayer] VideoPlayerScreen._initPlayer: $e');
       if (mounted) {
@@ -68,6 +99,43 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           _error = '播放失败: $e';
         });
       }
+    }
+  }
+
+  /// 使用流式解密代理初始化播放器
+  Future<void> _initWithProxy(String cacheDir) async {
+    final cacheFilePath =
+        PlaybackCacheManager.getCacheFilePath(widget.encPath, cacheDir);
+
+    _proxy = StreamingDecryptProxy();
+    await _proxy!.start(widget.encPath, cacheFilePath);
+    _usingProxy = true;
+
+    debugPrint('[SnPlayer] VideoPlayerScreen: 流式代理播放 ${_proxy!.proxyUrl}');
+    _controller = VideoPlayerController.networkUrl(
+      Uri.parse(_proxy!.proxyUrl),
+    );
+
+    await _controller!.initialize();
+    await _controller!.play();
+    _setLoading(false);
+  }
+
+  /// 降级路径：全量解密后播放（原有逻辑）
+  Future<void> _initWithFullDecrypt(String cacheDir) async {
+    debugPrint('[SnPlayer] VideoPlayerScreen: 全量解密播放');
+    _tempPath = await CryptoService.decryptToTemp(widget.encPath, cacheDir);
+    _controller = VideoPlayerController.file(File(_tempPath!));
+    await _controller!.initialize();
+    await _controller!.play();
+    _setLoading(false);
+  }
+
+  void _setLoading(bool loading) {
+    if (mounted) {
+      setState(() {
+        _isLoading = loading;
+      });
     }
   }
 
@@ -92,10 +160,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void dispose() {
     _controller?.dispose();
-    // 离开页面时立即清理临时文件
-    if (_tempPath != null) {
+
+    // 停止流式解密代理（如果在用）
+    if (_usingProxy && _proxy != null) {
+      _proxy!.stop();
+    }
+
+    // 清理临时文件：
+    // - 缓存命中的文件不删除（保留供二次播放）
+    // - 代理播放的文件不删除（流式写入的缓存，保留供二次播放）
+    // - 全量解密的临时文件删除（每次重新解密）
+    if (_tempPath != null && !_usingCache && !_usingProxy) {
       SafeDeleteHelper.fastDelete(_tempPath!);
     }
+
     super.dispose();
   }
 
@@ -139,7 +217,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           CircularProgressIndicator(color: Colors.white70),
           SizedBox(height: AppSpacing.xl),
           Text(
-            '正在解密视频...',
+            '准备播放...',
             style: TextStyle(color: Colors.white70, fontSize: 15),
           ),
         ],

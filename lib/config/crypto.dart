@@ -114,3 +114,37 @@ const int thumbCacheExpireDays = 7;
 
 /// 文件夹元数据文件名
 const String foldersJsonFileName = '.folders.json';
+
+// ═══════════════════════════════════════════════════════════
+// 流式解密配置
+// ═══════════════════════════════════════════════════════════
+
+/// 流式解密 HTTP 响应处理块大小（256KB）
+///
+/// 每处理此大小的数据后让出事件循环（await Future.delayed(Duration.zero)），
+/// 防止长时间同步解密阻塞 UI 线程。256KB 块约 5-25ms，用户无感知。
+const int streamingChunkSize = 256 * 1024;
+
+/// 内存块缓存粒度（4MB，与 [bufferSize] 一致）
+///
+/// 解密后的数据按此粒度缓存，seek 回退或重复请求时直接命中内存。
+const int streamingBlockSize = 4 * 1024 * 1024;
+
+/// 内存块缓存上限（16 块 × 4MB = 64MB）
+///
+/// LRU 策略淘汰最久未访问的块，控制内存占用。
+const int streamingMaxCacheBlocks = 16;
+
+/// 磁盘播放缓存总上限（500MB）
+///
+/// 超过此值时按最旧优先策略清理 play_cache/ 中的缓存文件。
+const int playCacheMaxSize = 500 * 1024 * 1024;
+
+/// 磁盘播放缓存过期天数（3 天）
+const int playCacheExpireDays = 3;
+
+/// 流式解密代理绑定地址
+const String streamingProxyHost = '127.0.0.1';
+
+/// 流式解密代理 URL 路径
+const String streamingProxyPath = '/video';
