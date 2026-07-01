@@ -16,4 +16,7 @@ class AppFontSize {
 
   /// 18px — 大标题（较少使用）
   static const double lg = 18.0;
+
+  /// 20px — 超大标题（AppBar 品牌名等）
+  static const double xl = 20.0;
 }

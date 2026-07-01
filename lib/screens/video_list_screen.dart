@@ -212,23 +212,23 @@ class _VideoListScreenState extends State<VideoListScreen> {
         'SnPlayer',
         style: TextStyle(
           fontWeight: FontWeight.w700,
-          fontSize: 22,
+          fontSize: AppFontSize.xl,
           letterSpacing: -0.5,
         ),
       ),
       actions: [
         IconButton(
-          icon: const Icon(Icons.add_rounded, size: 20),
+          icon: const Icon(Icons.add_rounded, size: AppSizes.iconSm),
           tooltip: '安全访问添加',
           onPressed: _pickAndEncryptVideosFullAccess,
         ),
         IconButton(
-          icon: const Icon(Icons.cleaning_services_rounded, size: 20),
+          icon: const Icon(Icons.cleaning_services_rounded, size: AppSizes.iconSm),
           tooltip: '清理缓存',
           onPressed: _cleanupCache,
         ),
         IconButton(
-          icon: const Icon(Icons.storage_rounded, size: 20),
+          icon: const Icon(Icons.storage_rounded, size: AppSizes.iconSm),
           tooltip: '存储统计',
           onPressed: _showStorageStats,
         ),
@@ -290,7 +290,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
         return SliverPadding(
           padding: const EdgeInsets.fromLTRB(
-              AppSpacing.spacing3, AppSpacing.spacing2, AppSpacing.spacing3, AppSpacing.spacing3),
+              AppSpacing.spacing4, AppSpacing.spacing4, AppSpacing.spacing4, AppSpacing.spacing4),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
@@ -776,7 +776,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
                           child: const Icon(
                             Icons.info_outline_rounded,
                             color: AppColors.brand,
-                            size: 22,
+                            size: AppSizes.iconMd,
                           ),
                         ),
                         const SizedBox(width: AppSpacing.spacing4),
@@ -865,7 +865,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: colorScheme.onSurfaceVariant),
+          Icon(icon, size: AppSizes.iconXs, color: colorScheme.onSurfaceVariant),
           const SizedBox(width: AppSpacing.spacing4),
           SizedBox(
             width: 72,

@@ -36,7 +36,7 @@ class VideoCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 缩略图区域
+            // 缩略图区域（自动填充剩余空间）
             _buildThumbnail(colorScheme),
             // 信息区域
             Padding(
@@ -109,9 +109,10 @@ class VideoCard extends StatelessWidget {
   }
 
   Widget _buildThumbnail(ColorScheme colorScheme) {
-    return AspectRatio(
-      aspectRatio: 16 / 9,
-      child: Stack(
+    return Expanded(
+      child: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: Stack(
         fit: StackFit.expand,
         children: [
           // 磁盘缓存缩略图或占位符
@@ -148,8 +149,9 @@ class VideoCard extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildPlaceholder(ColorScheme colorScheme) {
     return Container(

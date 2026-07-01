@@ -9,7 +9,6 @@ import '../services/path_provider_service.dart';
 import '../services/playback_cache_manager.dart';
 import '../services/streaming_decrypt_proxy.dart';
 import '../theme/app_font_size.dart';
-import '../theme/app_font_size.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/player/player_gesture.dart';
 import '../widgets/player/player_controls.dart';
@@ -243,7 +242,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           const SizedBox(height: AppSpacing.spacing5),
           Text(
             _error!,
-            style: const TextStyle(color: Colors.white70, fontSize: 15),
+            style: const TextStyle(color: Colors.white70, fontSize: AppFontSize.sm),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.spacing7),

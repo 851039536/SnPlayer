@@ -277,7 +277,7 @@ class _PlayerGestureState extends State<PlayerGesture> {
                 FileUtils.formatDuration(_dragTargetPosition!),
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 22,
+                  fontSize: AppFontSize.xl + 2,
                   fontWeight: FontWeight.bold,
                 ),
               ),
