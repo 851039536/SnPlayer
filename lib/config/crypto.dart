@@ -151,22 +151,3 @@ const String streamingProxyHost = '127.0.0.1';
 
 /// 流式解密代理 URL 路径
 const String streamingProxyPath = '/video';
-
-/// 流式解密节流延迟（毫秒）
-///
-/// burst 块之后每块等待此时间。这是 **localhost 回环下唯一有效的速率限制**：
-/// - `flush()` 在 127.0.0.1 上几乎零延迟（数据瞬间进入播放器内部缓冲区），
-///   不提供实质背压。
-/// - 无节流时解密器以 ~20MB/s 灌入，远超播放器消费速率（1080p ~1MB/s），
-///   导致 `pipelineFull: too many frames in pipeline` — 解码管道溢出、帧堆积。
-/// - 15ms/512KB ≈ 34MB/s，仍远高于播放所需，但给了播放器消化时间。
-///
-/// seek 后尤其关键：播放器重建解码管道期间无法消费数据，节流防止灌爆。
-const int streamingThrottleDelayMs = 15;
-
-/// 流式解密爆发块数（免延迟）
-///
-/// 前 8 块（512KB×8=4MB）零延迟发出，覆盖 ExoPlayer 起播和 seek 恢复所需
-/// 的最小数据量。从 16 降为 8：seek 后播放器重建解码管道期间最脆弱，
-/// 8MB 瞬间灌入容易触发 pipelineFull，4MB 足够起播且更安全。
-const int streamingBurstBlocks = 8;

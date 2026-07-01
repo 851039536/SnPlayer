@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -35,6 +36,13 @@ class StreamingDecryptProxy {
   int? _port;
   bool _stopped = false;
 
+  /// 长驻解密 worker Isolate
+  ///
+  /// 解密在独立 Isolate 执行，主线程事件循环零同步阻塞，
+  /// 播放器的并发 Range 请求（视频轨+音频轨+seek）可即时响应。
+  Isolate? _worker;
+  SendPort? _workerSendPort;
+
   /// 内存块缓存（LRU），key 为块索引
   final _BlockCache _blockCache = _BlockCache();
 
@@ -64,7 +72,22 @@ class StreamingDecryptProxy {
         '(${(_decryptedSize / 1024 / 1024).toStringAsFixed(1)}MB), '
         'Content-Type=$_contentType');
 
-    // 4. 开始监听请求
+    // 4. spawn 长驻解密 worker Isolate
+    final workerReceivePort = ReceivePort();
+    _worker = await Isolate.spawn(_decryptWorkerEntry, workerReceivePort.sendPort);
+    _workerSendPort = await workerReceivePort.first as SendPort;
+
+    // 初始化 worker（传递 key/iv/encPath，只传一次）
+    _workerSendPort!.send({
+      'type': 'init',
+      'key': _key,
+      'iv': _iv,
+      'encPath': _encPath,
+    });
+
+    debugPrint('[SnPlayer] StreamingDecryptProxy: 解密 worker Isolate 已启动');
+
+    // 5. 开始监听请求
     _serveRequests();
 
     return _port!;
@@ -111,6 +134,12 @@ class StreamingDecryptProxy {
 
     await _server?.close(force: true);
     _server = null;
+
+    // 停止解密 worker Isolate
+    _workerSendPort?.send({'type': 'stop'});
+    _worker?.kill(priority: Isolate.immediate);
+    _worker = null;
+    _workerSendPort = null;
 
     _blockCache.clear();
 
@@ -271,23 +300,24 @@ class StreamingDecryptProxy {
 
   /// 解密块大小（512KB）
   ///
-  /// 从 2MB 降为 512KB：每块同步解密时间从 ~100ms 降至 ~25ms，
-  /// 减少单次事件循环阻塞时长，使并发 Range 请求响应更及时。
-  /// 大文件（700MB+）下 2MB 块的 100ms 阻塞会导致 ExoPlayer
-  /// 音频轨 Range 请求排队等待，引发 AudioTrack 供数不足 → 暂停 → 卡死。
+  /// 解密在 worker Isolate 中执行，主线程零同步阻塞。
+  /// 512KB 平衡了 Isolate 间数据传递开销和系统调用次数。
   static const int _decryptBlockSize = 512 * 1024;
 
   /// 解密并流式输出指定范围的数据
   ///
-  /// 每个请求独立打开加密文件句柄，消除并发 setPosition 竞态。
-  /// 解密后的数据直接写入 HTTP 响应供播放器消费，不在磁盘落缓存。
+  /// **架构**：解密在长驻 worker Isolate 中执行，主线程仅负责 HTTP 响应写入。
+  /// 主线程事件循环零同步阻塞，播放器的并发 Range 请求（视频轨+音频轨+seek）
+  /// 可即时响应，从根本上消除卡顿。
   ///
-  /// 性能优化：
-  /// - **cipher 复用**：CTR 模式连续 processBytes 自动递增 counter，
-  ///   顺序播放时同一请求内贯穿复用，仅 seek 跳转导致位置不连续时重建。
-  /// - **跳过冗余 setPosition**：顺序播放时文件句柄位置自然前进。
-  /// - **burst + 节流**：前 16 块零延迟（秒级起播），之后每块 5ms 节流，
-  ///   既给事件循环让出点处理并发请求，又防止解密器跑在播放器前面。
+  /// **流控**：worker 每发 [_ackWindowSize] 块后等主线程 ack（ack 窗口）。
+  /// 主线程 flush 完成后才发 ack，worker 才继续解密。
+  /// 这天然限制了超前解密量（最多 ~1MB），无需人为节流延迟。
+  ///
+  /// **取消**：seek 时旧连接断开，主线程发 cancel + ack 唤醒 worker 退出。
+  ///
+  /// **缓存**：主线程侧 LRU 块缓存，命中时直接返回不经过 worker。
+  /// worker 回传的整块数据也更新缓存。
   Future<void> _decryptAndStream(
     HttpResponse response,
     int rangeStart,
@@ -295,134 +325,104 @@ class StreamingDecryptProxy {
   ) async {
     int remaining = contentLength;
     int currentPos = rangeStart;
-    int blocksSent = 0;
 
-    // 禁用响应缓冲，解密数据立即写入 socket
     response.bufferOutput = false;
 
-    final buf = Uint8List(_decryptBlockSize);
-    final procBuf = Uint8List(_decryptBlockSize);
+    // 阶段 1：处理连续的缓存命中块（主线程直接返回，不经过 worker）
+    while (remaining > 0 && !_stopped) {
+      final blockIndex = currentPos ~/ _decryptBlockSize;
+      final blockOffset = currentPos % _decryptBlockSize;
+      final cachedBlock = _blockCache.get(blockIndex);
 
-    // cipher 复用：CTR 流式 cipher 内部 counter 随 processBytes 自动递增。
-    // 顺序播放时所有块位置连续，cipher 贯穿整个请求复用，消除每块重建开销。
-    // cipherPos 跟踪 cipher 当前已解密到的明文偏移，不连续时重建。
-    StreamCipher? cipher;
-    int cipherPos = -1;
+      if (cachedBlock == null) {
+        break;
+      }
 
-    // 文件句柄位置跟踪：顺序播放时 readInto 自动前进位置，
-    // 仅当位置不匹配时才 setPosition，减少系统调用。
-    int lastFilePos = -1;
+      final chunkLen = remaining < _decryptBlockSize ? remaining : _decryptBlockSize;
+      final srcEnd = blockOffset + chunkLen;
+      final actualEnd = srcEnd > cachedBlock.length ? cachedBlock.length : srcEnd;
+      final actualCopyLen = actualEnd - blockOffset;
 
-    final encFile = await File(_encPath).open(mode: FileMode.read);
+      if (actualCopyLen <= 0) {
+        break;
+      }
+
+      response.add(cachedBlock.sublist(blockOffset, actualEnd));
+      await response.flush();
+      remaining -= actualCopyLen;
+      currentPos += actualCopyLen;
+    }
+
+    if (remaining <= 0 || _stopped) {
+      return;
+    }
+
+    // 阶段 2：缓存未命中部分交给 worker Isolate 解密
+    if (_workerSendPort == null) {
+      debugPrint('[SnPlayer] StreamingDecryptProxy: worker 不可用，跳过');
+      return;
+    }
+
+    final replyPort = ReceivePort();
+    SendPort? ackPort;
+
+    _workerSendPort!.send({
+      'type': 'decrypt_range',
+      'rangeStart': currentPos,
+      'contentLength': remaining,
+      'replyPort': replyPort.sendPort,
+    });
 
     try {
-      while (remaining > 0 && !_stopped) {
-        final chunkLen =
-            remaining < _decryptBlockSize ? remaining : _decryptBlockSize;
-
-        // 检查内存块缓存（以 _decryptBlockSize 为粒度）
-        final blockIndex = currentPos ~/ _decryptBlockSize;
-        final blockOffset = currentPos % _decryptBlockSize;
-        final cachedBlock = _blockCache.get(blockIndex);
-
-        if (cachedBlock != null) {
-          final copyLen = chunkLen;
-          final srcStart = blockOffset;
-          final srcEnd = srcStart + copyLen;
-          final actualEnd =
-              srcEnd > cachedBlock.length ? cachedBlock.length : srcEnd;
-          final actualCopyLen = actualEnd - srcStart;
-
-          if (actualCopyLen > 0) {
-            response.add(cachedBlock.sublist(srcStart, actualEnd));
-            // flush 提供背压：等待数据写入 socket 后再继续，
-            // 避免大文件全量排队内存爆炸 + 突发灌满 ExoPlayer 管道
-            await response.flush();
-            remaining -= actualCopyLen;
-            currentPos += actualCopyLen;
-          }
-
-          // 缓存命中：跳过解密和节流，继续下一轮
-          continue;
-        }
-
-        // 缓存未命中：解密
-        final alignedStart = (currentPos ~/ aesBlockSize) * aesBlockSize;
-        final skipBytes = currentPos - alignedStart;
-
-        // 仅当 cipher 位置与当前对齐起点不一致时才重建
-        // （首次解密、seek 跳转、或缓存命中后位置不连续）
-        if (cipher == null || cipherPos != alignedStart) {
-          final counterOffset = alignedStart ~/ aesBlockSize;
-          final adjustedIv = CryptoUtils.incrementCounter(_iv, counterOffset);
-          cipher = CryptoUtils.createCtrCipher(_key, adjustedIv);
-        }
-
-        final cipherFileOffset = headerSize + alignedStart;
-        // 顺序播放时文件句柄位置自然前进，仅位置不匹配时才 setPosition
-        if (cipherFileOffset != lastFilePos) {
-          await encFile.setPosition(cipherFileOffset);
-        }
-
-        final totalDecryptLen = skipBytes + chunkLen;
-        final readLen = totalDecryptLen < _decryptBlockSize
-            ? totalDecryptLen
-            : _decryptBlockSize;
-        final bytesRead = await encFile.readInto(buf, 0, readLen);
-
-        if (bytesRead <= 0) {
+      await for (final event in replyPort) {
+        if (_stopped) {
+          _workerSendPort?.send({'type': 'cancel'});
+          ackPort?.send('ack');
           break;
         }
 
-        // 解密
-        cipher.processBytes(buf, 0, bytesRead, procBuf, 0);
-        // 更新 cipher 位置：CTR 模式 counter 已自动递进 bytesRead 字节
-        cipherPos = alignedStart + bytesRead;
-        // 更新文件句柄位置：readInto 已前进 bytesRead 字节
-        lastFilePos = cipherFileOffset + bytesRead;
-
-        // 先输出 HTTP 响应（保证供数连续性）
-        final outputStart = skipBytes;
-        final outputEnd = bytesRead;
-        final outputLen = outputEnd - outputStart;
-
-        if (outputLen > 0) {
-          // 必须拷贝 — sublist 是视图，下轮解密会覆盖 procBuf。
-          response.add(Uint8List.fromList(
-              procBuf.sublist(outputStart, outputEnd)));
-          // flush 提供背压：等待数据写入 socket 后再解密下一块，
-          // 避免大文件（700MB+）全量排队内存爆炸 + 突发灌满 ExoPlayer 管道
-          // 导致 pipelineFull + AudioTrack 供数不足 → 卡死
-          await response.flush();
+        if (event is! Map) {
+          continue;
         }
+        final type = event['type'] as String?;
 
-        // 更新内存块缓存（仅缓存整块，512KB 粒度）
-        final currentBlockIndex = alignedStart ~/ _decryptBlockSize;
-        final blockStartAligned = currentBlockIndex * _decryptBlockSize;
-        if (alignedStart == blockStartAligned &&
-            bytesRead >= _decryptBlockSize) {
-          _blockCache.put(
-            currentBlockIndex,
-            Uint8List.fromList(
-                procBuf.sublist(0, _decryptBlockSize)),
-          );
+        if (type == 'block') {
+          final data = event['data'] as Uint8List;
+
+          // 缓存 ackPort（第一块附带）
+          if (event['ackPort'] != null) {
+            ackPort = event['ackPort'] as SendPort;
+          }
+
+          // 更新内存块缓存（仅整块）
+          if (event['isFullBlock'] == true) {
+            final blockIndex = event['blockIndex'] as int;
+            _blockCache.put(blockIndex, data);
+          }
+
+          try {
+            response.add(data);
+            await response.flush();
+          } catch (e) {
+            // 连接已断开（播放器 seek/stop），取消 worker 任务
+            _workerSendPort?.send({'type': 'cancel'});
+            ackPort?.send('ack'); // 唤醒可能在等 ack 的 worker
+            break;
+          }
+
+          // 发 ack，让 worker 继续下一块
+          ackPort?.send('ack');
+        } else if (type == 'done') {
+          break;
+        } else if (type == 'cancelled') {
+          break;
+        } else if (type == 'error') {
+          debugPrint('[SnPlayer] StreamingDecryptProxy: worker 错误: ${event['message']}');
+          break;
         }
-
-        remaining -= outputLen;
-        currentPos += outputLen;
-
-        // 节流：前 burst 块零延迟（秒级起播），之后每块延迟 throttle ms
-        // 两个作用：
-        // 1. 给事件循环让出点 — processBytes 同步阻塞 ~25ms/块，需让出处理并发 Range 请求
-        // 2. 防止解密器跑在播放器前面 — flush 只等数据进 socket 缓冲区，不等播放器消费
-        final throttleDelay = blocksSent < streamingBurstBlocks
-            ? Duration.zero
-            : Duration(milliseconds: streamingThrottleDelayMs);
-        await Future.delayed(throttleDelay);
-        blocksSent++;
       }
     } finally {
-      await encFile.close();
+      replyPort.close();
     }
   }
 
@@ -461,4 +461,196 @@ class _Range {
   final int start;
   final int end;
   const _Range(this.start, this.end);
+}
+
+// ═══════════════════════════════════════════════════════════
+// 解密 Worker Isolate（长驻）
+// ═══════════════════════════════════════════════════════════
+//
+// 解密在独立 Isolate 执行，主线程事件循环零同步阻塞。
+// 主线程通过 SendPort 发送命令，worker 通过 replyPort 回传解密数据块。
+//
+// 命令：
+// - 'init': 初始化 key/iv/encPath（只调一次）
+// - 'decrypt_range': 解密指定范围，连续回传数据块
+// - 'cancel': 取消当前解密任务（seek 时调用）
+// - 'stop': 关闭 worker
+//
+// 流控：worker 每发 [ackWindowSize] 块后等主线程 ack，
+// 防止超前解密导致内存积压。主线程 flush 完成后才发 ack。
+//
+// 并发：worker 的 async 事件循环可交替处理多个 decrypt_range 请求
+// （视频轨+音频轨），各请求有独立的 replyPort 和 ackReceivePort。
+
+/// worker 入口函数（顶层函数，Isolate.spawn 要求）
+void _decryptWorkerEntry(SendPort mainPort) {
+  final receivePort = ReceivePort();
+  mainPort.send(receivePort.sendPort);
+
+  Uint8List? key;
+  Uint8List? iv;
+  String? encPath;
+  bool cancelled = false;
+
+  receivePort.listen((message) async {
+    if (message is! Map) {
+      return;
+    }
+    final type = message['type'] as String?;
+
+    if (type == 'init') {
+      key = message['key'] as Uint8List;
+      iv = message['iv'] as Uint8List;
+      encPath = message['encPath'] as String;
+      return;
+    }
+
+    if (type == 'cancel') {
+      cancelled = true;
+      return;
+    }
+
+    if (type == 'stop') {
+      receivePort.close();
+      return;
+    }
+
+    if (type == 'decrypt_range') {
+      if (key == null || iv == null || encPath == null) {
+        final replyPort = message['replyPort'] as SendPort;
+        replyPort.send({'type': 'error', 'message': 'worker not initialized'});
+        return;
+      }
+
+      cancelled = false;
+      final replyPort = message['replyPort'] as SendPort;
+      try {
+        await _decryptRangeInWorker(
+          message['rangeStart'] as int,
+          message['contentLength'] as int,
+          replyPort,
+          key!,
+          iv!,
+          encPath!,
+          () => cancelled,
+        );
+      } catch (e) {
+        replyPort.send({'type': 'error', 'message': e.toString()});
+      }
+    }
+  });
+}
+
+/// worker 内部：解密指定范围并流式回传
+///
+/// 使用 ack 窗口流控（[ackWindowSize] 块等一次 ack），
+/// 检查 [isCancelled] 以支持 seek 时取消旧任务。
+/// cipher 复用：连续块位置无需重建 CTR cipher。
+Future<void> _decryptRangeInWorker(
+  int rangeStart,
+  int contentLength,
+  SendPort replyPort,
+  Uint8List key,
+  Uint8List iv,
+  String encPath,
+  bool Function() isCancelled,
+) async {
+  const blockSize = 512 * 1024;
+  const ackWindowSize = 2; // 每发 2 块等一次 ack，最多积压 ~1MB
+
+  final ackReceivePort = ReceivePort();
+  bool ackPortSent = false;
+
+  final encFile = await File(encPath).open(mode: FileMode.read);
+
+  try {
+    int currentPos = rangeStart;
+    int remaining = contentLength;
+
+    StreamCipher? cipher;
+    int cipherPos = -1;
+    int lastFilePos = -1;
+
+    final buf = Uint8List(blockSize);
+    final procBuf = Uint8List(blockSize);
+
+    int sentSinceLastAck = 0;
+
+    while (remaining > 0) {
+      if (isCancelled()) {
+        replyPort.send({'type': 'cancelled'});
+        return;
+      }
+
+      final chunkLen = remaining < blockSize ? remaining : blockSize;
+
+      final alignedStart = (currentPos ~/ aesBlockSize) * aesBlockSize;
+      final skipBytes = currentPos - alignedStart;
+
+      // cipher 复用：连续块位置无需重建
+      if (cipher == null || cipherPos != alignedStart) {
+        final counterOffset = alignedStart ~/ aesBlockSize;
+        final adjustedIv = CryptoUtils.incrementCounter(iv, counterOffset);
+        cipher = CryptoUtils.createCtrCipher(key, adjustedIv);
+      }
+
+      final cipherFileOffset = headerSize + alignedStart;
+      if (cipherFileOffset != lastFilePos) {
+        await encFile.setPosition(cipherFileOffset);
+      }
+
+      final totalDecryptLen = skipBytes + chunkLen;
+      final readLen = totalDecryptLen < blockSize ? totalDecryptLen : blockSize;
+      final bytesRead = await encFile.readInto(buf, 0, readLen);
+
+      if (bytesRead <= 0) {
+        break;
+      }
+
+      cipher.processBytes(buf, 0, bytesRead, procBuf, 0);
+      cipherPos = alignedStart + bytesRead;
+      lastFilePos = cipherFileOffset + bytesRead;
+
+      final outputStart = skipBytes;
+      final outputEnd = bytesRead;
+      final outputLen = outputEnd - outputStart;
+
+      if (outputLen > 0) {
+        final outputData =
+            Uint8List.fromList(procBuf.sublist(outputStart, outputEnd));
+        final blockIndex = alignedStart ~/ blockSize;
+        final isFullBlock = skipBytes == 0 && bytesRead >= blockSize;
+
+        final blockMsg = <String, dynamic>{
+          'type': 'block',
+          'data': outputData,
+          'blockIndex': blockIndex,
+          'isFullBlock': isFullBlock,
+        };
+
+        // 第一块附带 ackPort，主线程缓存后复用
+        if (!ackPortSent) {
+          blockMsg['ackPort'] = ackReceivePort.sendPort;
+          ackPortSent = true;
+        }
+
+        replyPort.send(blockMsg);
+        sentSinceLastAck++;
+
+        // 窗口流控：每 ackWindowSize 块等一次 ack
+        if (sentSinceLastAck >= ackWindowSize) {
+          await ackReceivePort.first;
+          sentSinceLastAck = 0;
+        }
+      }
+
+      remaining -= outputLen;
+      currentPos += outputLen;
+    }
+
+    replyPort.send({'type': 'done'});
+  } finally {
+    await encFile.close();
+    ackReceivePort.close();
+  }
 }
