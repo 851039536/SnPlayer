@@ -125,10 +125,12 @@ const String foldersJsonFileName = '.folders.json';
 /// 防止长时间同步解密阻塞 UI 线程。256KB 块约 5-25ms，用户无感知。
 const int streamingChunkSize = 256 * 1024;
 
-/// 内存块缓存粒度（4MB，与 [bufferSize] 一致）
+/// 内存块缓存粒度（512KB，由 StreamingDecryptProxy._decryptBlockSize 决定）
 ///
 /// 解密后的数据按此粒度缓存，seek 回退或重复请求时直接命中内存。
-const int streamingBlockSize = 4 * 1024 * 1024;
+/// 注意：实际缓存粒度已改为 512KB（StreamingDecryptProxy 内部常量），
+/// 此常量当前仅作为文档参考，未被代码使用。
+const int streamingBlockSize = 512 * 1024;
 
 /// 内存块缓存上限（128 块 × 512KB = 64MB）
 ///
@@ -154,11 +156,14 @@ const String streamingProxyPath = '/video';
 ///
 /// 每块解密输出后等待此时间，防止数据灌入速度远超 ExoPlayer 消费速度，
 /// 导致管道溢出（pipelineFull）、音频帧被丢弃、AudioTrack 暂停 → 卡死。
-/// 有效吞吐约 512KB ÷ 20ms ≈ 25MB/s，远高于视频播放所需 ~1MB/s。
-const int streamingThrottleDelayMs = 20;
+/// 有效吞吐约 512KB ÷ 15ms ≈ 34MB/s，远高于视频播放所需 ~1MB/s。
+///
+/// 仅对解密路径生效；缓存命中路径不节流（内存数据不会溢出管道）。
+const int streamingThrottleDelayMs = 15;
 
 /// 流式解密爆发块数（免延迟）
 ///
-/// 前 4 块（512KB×4=2MB）零延迟发出，保证秒级起播体验。
+/// 前 16 块（512KB×16=8MB）零延迟发出，覆盖 ExoPlayer 绝大多数 Range 请求
+/// （通常 1-2MB），保证秒级起播、seek 后快速恢复、音频轨并发请求不被拖慢。
 /// 之后每块等待 [streamingThrottleDelayMs] 毫秒进入节流模式。
-const int streamingBurstBlocks = 4;
+const int streamingBurstBlocks = 16;

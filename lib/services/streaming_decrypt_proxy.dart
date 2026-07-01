@@ -184,17 +184,19 @@ class StreamingDecryptProxy {
     final rangeHeader = request.headers.value('range');
     int rangeStart = 0;
     int rangeEnd = _decryptedSize - 1;
+    bool hasValidRange = false;
 
     if (rangeHeader != null) {
       final parsed = _parseRange(rangeHeader, _decryptedSize);
       if (parsed != null) {
         rangeStart = parsed.start;
         rangeEnd = parsed.end;
+        hasValidRange = true;
       }
     }
 
     final contentLength = rangeEnd - rangeStart + 1;
-    final isPartial = rangeHeader != null;
+    final isPartial = hasValidRange;
 
     _writeCommonHeaders(request.response);
     request.response.headers.contentLength = contentLength;
@@ -342,17 +344,7 @@ class StreamingDecryptProxy {
             currentPos += actualCopyLen;
           }
 
-          if (actualCopyLen < copyLen) {
-            continue;
-          }
-
-          // 节流：前 burst 块零延迟（秒级起播），之后每块延迟 throttle ms
-          // 防止 localhost 回环 TCP 缓冲区吞掉 flush 背压，导致 ExoPlayer 管道溢出
-          final throttleDelay = blocksSent < streamingBurstBlocks
-              ? Duration.zero
-              : Duration(milliseconds: streamingThrottleDelayMs);
-          await Future.delayed(throttleDelay);
-          blocksSent++;
+          // 缓存命中：跳过解密和节流，继续下一轮
           continue;
         }
 

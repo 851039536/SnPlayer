@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../utils/file_utils.dart';
+
 /// 手势检测层
 ///
 /// 包裹视频画面，处理触摸手势交互：
@@ -267,7 +269,7 @@ class _PlayerGestureState extends State<PlayerGesture> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
-                _formatDuration(_dragTargetPosition!),
+                FileUtils.formatDuration(_dragTargetPosition!),
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 22,

@@ -480,7 +480,7 @@ class CryptoService {
     List<int> writeOffsets,
     String outputPath,
   ) async {
-    final outputRaf = File(outputPath).openSync(mode: FileMode.writeOnlyAppend);
+    final outputRaf = File(outputPath).openSync(mode: FileMode.write);
     try {
       final copyBuf = Uint8List(bufferSize);
       for (int i = 0; i < tempPaths.length; i++) {

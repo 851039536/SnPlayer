@@ -162,6 +162,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _controller?.dispose();
 
     // 停止流式解密代理（如果在用）
+    // stop() 内部首行即设置 _stopped=true 阻止新请求，
+    // 后续异步清理（server close、文件 flush）可以 fire-and-forget
     if (_usingProxy && _proxy != null) {
       _proxy!.stop();
     }
