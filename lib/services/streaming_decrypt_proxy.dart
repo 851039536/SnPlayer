@@ -305,6 +305,7 @@ class StreamingDecryptProxy {
   ) async {
     int remaining = contentLength;
     int currentPos = rangeStart;
+    int blocksSent = 0;
 
     // 禁用响应缓冲，解密数据立即写入 socket
     response.bufferOutput = false;
@@ -345,8 +346,13 @@ class StreamingDecryptProxy {
             continue;
           }
 
-          // 每块让出事件循环，允许并发 Range 请求被处理
-          await Future.delayed(Duration.zero);
+          // 节流：前 burst 块零延迟（秒级起播），之后每块延迟 throttle ms
+          // 防止 localhost 回环 TCP 缓冲区吞掉 flush 背压，导致 ExoPlayer 管道溢出
+          final throttleDelay = blocksSent < streamingBurstBlocks
+              ? Duration.zero
+              : Duration(milliseconds: streamingThrottleDelayMs);
+          await Future.delayed(throttleDelay);
+          blocksSent++;
           continue;
         }
 
@@ -404,8 +410,13 @@ class StreamingDecryptProxy {
         remaining -= outputLen;
         currentPos += outputLen;
 
-        // 每块让出事件循环，允许并发 Range 请求被处理
-        await Future.delayed(Duration.zero);
+        // 节流：前 burst 块零延迟（秒级起播），之后每块延迟 throttle ms
+        // 防止 localhost 回环 TCP 缓冲区吞掉 flush 背压，导致 ExoPlayer 管道溢出
+        final throttleDelay = blocksSent < streamingBurstBlocks
+            ? Duration.zero
+            : Duration(milliseconds: streamingThrottleDelayMs);
+        await Future.delayed(throttleDelay);
+        blocksSent++;
       }
     } finally {
       await encFile.close();

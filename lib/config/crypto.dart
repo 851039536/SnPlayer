@@ -149,3 +149,16 @@ const String streamingProxyHost = '127.0.0.1';
 
 /// 流式解密代理 URL 路径
 const String streamingProxyPath = '/video';
+
+/// 流式解密节流延迟（毫秒）
+///
+/// 每块解密输出后等待此时间，防止数据灌入速度远超 ExoPlayer 消费速度，
+/// 导致管道溢出（pipelineFull）、音频帧被丢弃、AudioTrack 暂停 → 卡死。
+/// 有效吞吐约 512KB ÷ 20ms ≈ 25MB/s，远高于视频播放所需 ~1MB/s。
+const int streamingThrottleDelayMs = 20;
+
+/// 流式解密爆发块数（免延迟）
+///
+/// 前 4 块（512KB×4=2MB）零延迟发出，保证秒级起播体验。
+/// 之后每块等待 [streamingThrottleDelayMs] 毫秒进入节流模式。
+const int streamingBurstBlocks = 4;
