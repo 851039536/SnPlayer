@@ -435,6 +435,12 @@ class _VideoListScreenState extends State<VideoListScreen> {
           label: '移动到文件夹',
           onTap: () => _moveVideo(video, videoProvider),
         ),
+        // 打开存储路径
+        ActionSheetItem(
+          icon: Icons.folder_open_rounded,
+          label: '打开存储路径',
+          onTap: () => _openStoragePath(video),
+        ),
         // 删除
         ActionSheetItem(
           icon: Icons.delete_outline_rounded,
@@ -608,6 +614,26 @@ class _VideoListScreenState extends State<VideoListScreen> {
         }),
       ],
     );
+  }
+
+  /// 打开加密视频所在文件夹
+  Future<void> _openStoragePath(VideoItem video) async {
+    try {
+      final parentDir = File(video.encPath).parent.path;
+      await _fileChannel.invokeMethod('openFolder', {'path': parentDir});
+    } on PlatformException catch (e) {
+      debugPrint('[SnPlayer] _openStoragePath: code=${e.code}, msg=${e.message}');
+      if (mounted) {
+        final msg = switch (e.code) {
+          'NO_FILE_MANAGER' => '未找到文件管理器',
+          'FOLDER_NOT_FOUND' => '文件夹不存在',
+          _ => '打开失败',
+        };
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } catch (e) {
+      debugPrint('[SnPlayer] _openStoragePath: $e');
+    }
   }
 
   Future<void> _deleteVideo(VideoItem video, VideoListProvider provider) async {
