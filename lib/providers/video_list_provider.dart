@@ -340,6 +340,53 @@ class VideoListProvider extends ChangeNotifier {
     );
   }
 
+  /// 清空全部缓存（播放缓存 + 缩略图磁盘缓存）
+  ///
+  /// 用户主动点击"清理缓存"时调用，删除 play_cache/ 和 thumb_cache/ 下的所有文件。
+  /// 同时清空视频对象的 thumbCachePath 引用，触发缩略图重新加载。
+  /// 返回删除的文件总数。
+  Future<int> clearAllCache() async {
+    int deleted = 0;
+
+    // 1. 清空播放缓存（play_cache/）
+    final cacheDir = await PathProviderService.getCacheDir();
+    deleted += await _deleteAllFilesInDir(cacheDir);
+
+    // 2. 清空缩略图磁盘缓存（thumb_cache/）
+    final thumbCacheDir = await PathProviderService.getThumbCacheDir();
+    deleted += await _deleteAllFilesInDir(thumbCacheDir);
+
+    // 3. 清空视频对象的 thumbCachePath 引用
+    for (final video in _videos) {
+      video.thumbCachePath = null;
+    }
+
+    if (deleted > 0) {
+      debugPrint('[SnPlayer] VideoListProvider.clearAllCache: 清空 $deleted 个缓存文件');
+      notifyListeners();
+    }
+
+    return deleted;
+  }
+
+  /// 删除目录下所有文件（非递归，仅顶层文件）
+  Future<int> _deleteAllFilesInDir(String dirPath) async {
+    final dir = Directory(dirPath);
+    if (!await dir.exists()) {
+      return 0;
+    }
+
+    int count = 0;
+    await for (final entity in dir.list()) {
+      if (entity is File) {
+        if (await SafeDeleteHelper.fastDelete(entity.path)) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
   /// 清理孤儿缩略图
   Future<int> cleanOrphanThumbnails() async {
     return await StorageService.cleanOrphanThumbnails();

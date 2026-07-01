@@ -65,6 +65,30 @@ class MainActivity : FlutterActivity() {
                 } catch (e: Exception) {
                     result.error("OPEN_FAILED", e.message, null)
                 }
+            } else if (call.method == "openUrl") {
+                // 通过 HTTP URL 打开第三方播放器（用于流式解密代理播放）
+                val url = call.argument<String>("url")
+                if (url == null) {
+                    result.error("NO_PATH", "url is null", null)
+                    return@setMethodCallHandler
+                }
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(Uri.parse(url), "video/*")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+
+                    if (packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY) == null) {
+                        result.error("NO_PLAYER", "no video player installed", null)
+                        return@setMethodCallHandler
+                    }
+
+                    startActivity(Intent.createChooser(intent, "选择播放器"))
+                    result.success(true)
+                } catch (e: Exception) {
+                    result.error("OPEN_FAILED", e.message, null)
+                }
             } else if (call.method == "openFolder") {
                 val path = call.argument<String>("path")
                 if (path == null) {

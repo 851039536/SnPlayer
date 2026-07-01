@@ -13,6 +13,8 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/crypto_service.dart';
 import '../services/permission_service.dart';
 import '../services/path_provider_service.dart';
+import '../services/playback_cache_manager.dart';
+import '../services/streaming_decrypt_proxy.dart';
 import '../utils/file_utils.dart';
 import '../widgets/video_card.dart';
 import '../widgets/folder_tabs.dart';
@@ -42,6 +44,9 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
   final ScrollController _scrollController = ScrollController();
   static const int _preloadRows = 2; // 上下各预加载 2 行
+
+  /// 第三方播放器使用的流式解密代理（页面存活期间保持，dispose 时停止）
+  StreamingDecryptProxy? _externalProxy;
 
   @override
   void initState() {
@@ -112,6 +117,8 @@ class _VideoListScreenState extends State<VideoListScreen> {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     context.read<VideoListProvider>().cancelThumbnailLoading();
+    // 停止第三方播放器的流式解密代理
+    _externalProxy?.stop();
     super.dispose();
   }
 
@@ -473,34 +480,96 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
   Future<void> _playExternal(VideoItem video) async {
     try {
+      final cacheDir = await PathProviderService.getCacheDir();
+
+      // ── 阶段 1：磁盘缓存命中 → 直接打开缓存文件（零解密） ──
+      final cachedFile = await PlaybackCacheManager.getCachedFile(
+        video.encPath, cacheDir,
+      );
+      if (cachedFile != null) {
+        debugPrint('[SnPlayer] _playExternal: 磁盘缓存命中，直接打开');
+        await _fileChannel.invokeMethod('openFile', {'path': cachedFile});
+        return;
+      }
+
+      // ── 阶段 2：流式解密代理 → HTTP URL 打开第三方播放器 ──
       showDialog(
         context: context,
         barrierDismissible: false,
         builder: (_) => const Center(child: CircularProgressIndicator()),
       );
 
-      // 解密到 UnLockVideo 目录
+      // 停止上一次的代理（如有）
+      await _externalProxy?.stop();
+      _externalProxy = null;
+
+      final cacheFilePath =
+          PlaybackCacheManager.getCacheFilePath(video.encPath, cacheDir);
+      _externalProxy = StreamingDecryptProxy();
+      await _externalProxy!.start(video.encPath, cacheFilePath);
+
+      if (mounted) { Navigator.pop(context); } // 关闭 loading
+
+      debugPrint('[SnPlayer] _playExternal: 流式代理 ${_externalProxy!.proxyUrl}');
+      await _fileChannel.invokeMethod('openUrl', {
+        'url': _externalProxy!.proxyUrl,
+      });
+      // 代理在页面存活期间保持运行，dispose 时自动停止
+    } on PlatformException catch (e) {
+      if (mounted) { Navigator.pop(context); }
+      debugPrint('[SnPlayer] _playExternal PlatformException: code=${e.code}, msg=${e.message}');
+
+      // 流式代理失败 → 降级全量解密
+      if (e.code == 'NO_PLAYER') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('没有找到可播放视频的应用，请安装 MX Player 或 VLC')),
+          );
+        }
+        return;
+      }
+
+      // 其他错误尝试降级全量解密
+      await _playExternalFallback(video);
+    } catch (e) {
+      if (mounted) { Navigator.pop(context); }
+      debugPrint('[SnPlayer] _playExternal: $e，降级全量解密');
+      await _playExternalFallback(video);
+    }
+  }
+
+  /// 降级路径：全量解密后用原生 openFile 打开
+  Future<void> _playExternalFallback(VideoItem video) async {
+    try {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+
+      // 停止代理（全量解密不需要代理）
+      await _externalProxy?.stop();
+      _externalProxy = null;
+
       final unlockDir = await PathProviderService.getUnlockVideoDir();
       await Directory(unlockDir).create(recursive: true);
-      final tempPath = '${unlockDir}/${video.displayName}.mp4';
+      final tempPath = '$unlockDir/${video.displayName}.mp4';
       await CryptoService.decryptFile(video.encPath, tempPath);
 
       if (mounted) { Navigator.pop(context); }
 
-      // 调用 Android 原生打开文件
       await _fileChannel.invokeMethod('openFile', {'path': tempPath});
     } on PlatformException catch (e) {
       if (mounted) { Navigator.pop(context); }
-      debugPrint('[SnPlayer] _playExternal PlatformException: code=${e.code}, msg=${e.message}');
-      final errorMsg = _getPlayExternalErrorMsg(e.code, e.message);
+      debugPrint('[SnPlayer] _playExternalFallback PlatformException: code=${e.code}, msg=${e.message}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(errorMsg)),
+          SnackBar(content: Text(_getPlayExternalErrorMsg(e.code, e.message))),
         );
       }
     } catch (e) {
       if (mounted) { Navigator.pop(context); }
-      debugPrint('[SnPlayer] _playExternal: $e');
+      debugPrint('[SnPlayer] _playExternalFallback: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('打开失败，请检查是否安装了播放器')),
@@ -901,9 +970,48 @@ class _VideoListScreenState extends State<VideoListScreen> {
   }
 
   Future<void> _cleanupCache() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('清理缓存'),
+        content: const Text(
+          '将清空所有播放缓存和缩略图缓存。\n'
+          '下次播放视频时需要重新解密，缩略图也会重新生成。\n\n'
+          '确定要清理吗？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('清理'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) { return; }
+
     final videoProvider = context.read<VideoListProvider>();
-    final cacheCleaned = await videoProvider.cleanupCache();
+
+    // 显示 loading
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final cacheCleaned = await videoProvider.clearAllCache();
     final orphansCleaned = await videoProvider.cleanOrphanThumbnails();
+
+    if (mounted) { Navigator.pop(context); } // 关闭 loading
+
+    // 重新加载缩略图
+    unawaited(videoProvider.loadThumbnails());
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
