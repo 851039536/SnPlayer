@@ -17,10 +17,10 @@ import 'crypto_service.dart';
 /// 1. 读取 .enc 文件头获取 IV/Salt，派生密钥
 /// 2. 启动 HttpServer 监听 127.0.0.1:{随机端口}
 /// 3. 播放器发送 Range 请求 → 代理计算密文偏移 + 调整 IV
-/// 4. 仅解密请求区间的数据，256KB 块流式返回
-/// 5. 同时写入磁盘缓存文件，二次播放直接从缓存加载
+/// 4. 仅解密请求区间的数据，512KB 块流式返回
+/// 5. 内存 LRU 块缓存加速 seek 回退和重复请求
 ///
-/// 并发安全：每个请求独立打开加密文件句柄，磁盘缓存写入用互斥锁保护。
+/// 并发安全：每个请求独立打开加密文件句柄。
 class StreamingDecryptProxy {
   HttpServer? _server;
 
@@ -37,14 +37,8 @@ class StreamingDecryptProxy {
   /// 内存块缓存（LRU），key 为块索引
   final _BlockCache _blockCache = _BlockCache();
 
-  /// 磁盘缓存文件句柄（仅用于 start 中预分配，stop 中关闭。流式传输期间不写入）
-  RandomAccessFile? _cacheFile;
-
   /// 启动代理服务器，返回分配的端口号。
-  ///
-  /// [encPath] 加密文件路径
-  /// [cacheFilePath] 磁盘缓存文件路径（预分配，流式写入解密数据）
-  Future<int> start(String encPath, String cacheFilePath) async {
+  Future<int> start(String encPath) async {
     _encPath = encPath;
 
     // 1. 读取加密文件元信息
@@ -56,15 +50,7 @@ class StreamingDecryptProxy {
     // 2. 推断 Content-Type（根据原始文件名扩展名）
     _contentType = _guessContentType(encPath);
 
-    // 3. 预分配并打开磁盘缓存文件（写入用，互斥锁保护）
-    final cacheParent = File(cacheFilePath).parent;
-    await cacheParent.create(recursive: true);
-    _cacheFile = await File(cacheFilePath).open(mode: FileMode.write);
-    await _cacheFile!.setPosition(_decryptedSize - 1);
-    await _cacheFile!.writeByte(0);
-    await _cacheFile!.setPosition(0);
-
-    // 4. 启动 HTTP 服务器
+    // 3. 启动 HTTP 服务器
     _server = await HttpServer.bind(
       InternetAddress.loopbackIPv4,
       0, // 系统分配端口
@@ -77,7 +63,7 @@ class StreamingDecryptProxy {
         '(${(_decryptedSize / 1024 / 1024).toStringAsFixed(1)}MB), '
         'Content-Type=$_contentType');
 
-    // 5. 开始监听请求
+    // 4. 开始监听请求
     _serveRequests();
 
     return _port!;
@@ -124,12 +110,6 @@ class StreamingDecryptProxy {
 
     await _server?.close(force: true);
     _server = null;
-
-    try {
-      await _cacheFile?.flush();
-      await _cacheFile?.close();
-    } catch (_) {}
-    _cacheFile = null;
 
     _blockCache.clear();
 
@@ -299,7 +279,7 @@ class StreamingDecryptProxy {
   /// 解密并流式输出指定范围的数据
   ///
   /// 每个请求独立打开加密文件句柄，消除并发 setPosition 竞态。
-  /// 流式传输期间不写磁盘缓存（避免磁盘 I/O 拖慢供数据），播放结束后可独立缓存。
+  /// 解密后的数据直接写入 HTTP 响应供播放器消费，不在磁盘落缓存。
   Future<void> _decryptAndStream(
     HttpResponse response,
     int rangeStart,

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -9,15 +10,22 @@ import 'safe_delete_helper.dart';
 /// 播放磁盘缓存管理器
 ///
 /// 管理解密后视频文件的磁盘缓存，支持：
-/// - 缓存完整性校验（文件大小比对）
+/// - 缓存完整性校验（文件大小比对 + 文件头内容验证）
 /// - 缓存路径生成
 /// - 过期清理
 /// - 总量管理（LRU 淘汰）
 class PlaybackCacheManager {
+  /// 文件头校验读取字节数
+  ///
+  /// 任何有效视频文件的前 64 字节必然包含非零数据（文件签名 + 元数据），
+  /// 全零文件只会来自 StreamingDecryptProxy 的预分配或文件系统稀疏分配。
+  static const int _headerCheckSize = 64;
+
   /// 检查缓存是否命中且完整
   ///
-  /// 比对缓存文件大小与期望的解密大小（= encFileSize - 64）。
-  /// 大小匹配则返回缓存文件路径，否则返回 null。
+  /// 比对缓存文件大小与期望的解密大小（= encFileSize - 64），
+  /// 并通过文件头内容校验拦截全零脏缓存文件。
+  /// 大小匹配且内容有效则返回缓存文件路径，否则返回 null。
   static Future<String?> getCachedFile(
     String encPath,
     String cacheDir,
@@ -43,11 +51,37 @@ class PlaybackCacheManager {
         return null;
       }
 
+      // 文件头内容校验：拦截全零脏缓存（StreamingDecryptProxy 预分配产物）
+      if (!await _isValidCacheContent(cacheFilePath)) {
+        debugPrint('[SnPlayer] PlaybackCacheManager: 缓存内容无效（全零文件），删除缓存');
+        await SafeDeleteHelper.fastDelete(cacheFilePath);
+        return null;
+      }
+
       debugPrint('[SnPlayer] PlaybackCacheManager: 缓存命中 $cacheFilePath');
       return cacheFilePath;
     } catch (e) {
       debugPrint('[SnPlayer] PlaybackCacheManager.getCachedFile: $e');
       return null;
+    }
+  }
+
+  /// 校验缓存文件头内容是否有效（非全零）
+  ///
+  /// 打开文件读取前 [_headerCheckSize] 字节，检查是否存在非零字节。
+  /// 全零文件说明内容未被填充，是脏缓存。
+  static Future<bool> _isValidCacheContent(String filePath) async {
+    final raf = await File(filePath).open(mode: FileMode.read);
+    try {
+      final header = Uint8List(_headerCheckSize);
+      final bytesRead = await raf.readInto(header, 0, _headerCheckSize);
+      if (bytesRead < _headerCheckSize) {
+        return false;
+      }
+      // 检查是否存在非零字节（有效视频文件必定有非零数据）
+      return header.any((b) => b != 0);
+    } finally {
+      await raf.close();
     }
   }
 

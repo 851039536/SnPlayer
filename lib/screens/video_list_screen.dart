@@ -503,10 +503,8 @@ class _VideoListScreenState extends State<VideoListScreen> {
       await _externalProxy?.stop();
       _externalProxy = null;
 
-      final cacheFilePath =
-          PlaybackCacheManager.getCacheFilePath(video.encPath, cacheDir);
       _externalProxy = StreamingDecryptProxy();
-      await _externalProxy!.start(video.encPath, cacheFilePath);
+      await _externalProxy!.start(video.encPath);
 
       if (mounted) { Navigator.pop(context); } // 关闭 loading
 

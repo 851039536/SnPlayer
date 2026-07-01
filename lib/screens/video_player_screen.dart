@@ -68,18 +68,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       );
       if (cachedFile != null) {
         debugPrint('[SnPlayer] VideoPlayerScreen: 磁盘缓存命中，直接播放');
-        _tempPath = cachedFile;
-        _usingCache = true;
-        _controller = VideoPlayerController.file(File(cachedFile));
-        await _controller!.initialize();
-        await _controller!.play();
-        _setLoading(false);
-        return;
+        try {
+          _tempPath = cachedFile;
+          _usingCache = true;
+          _controller = VideoPlayerController.file(File(cachedFile));
+          await _controller!.initialize();
+          await _controller!.play();
+          _setLoading(false);
+          return;
+        } catch (e) {
+          // 缓存文件损坏（如流式代理遗留的全零文件），删除并降级
+          debugPrint('[SnPlayer] VideoPlayerScreen: 缓存播放失败，降级到流式代理: $e');
+          _controller?.dispose();
+          _controller = null;
+          _usingCache = false;
+          _tempPath = null;
+          await SafeDeleteHelper.fastDelete(cachedFile);
+        }
       }
 
       // ── 阶段 2：流式解密代理 ──
       try {
-        await _initWithProxy(cacheDir);
+        await _initWithProxy();
         return;
       } catch (e) {
         debugPrint('[SnPlayer] VideoPlayerScreen: 流式代理失败，降级全量解密: $e');
@@ -103,12 +113,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   /// 使用流式解密代理初始化播放器
-  Future<void> _initWithProxy(String cacheDir) async {
-    final cacheFilePath =
-        PlaybackCacheManager.getCacheFilePath(widget.encPath, cacheDir);
-
+  Future<void> _initWithProxy() async {
     _proxy = StreamingDecryptProxy();
-    await _proxy!.start(widget.encPath, cacheFilePath);
+    await _proxy!.start(widget.encPath);
     _usingProxy = true;
 
     debugPrint('[SnPlayer] VideoPlayerScreen: 流式代理播放 ${_proxy!.proxyUrl}');
