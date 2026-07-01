@@ -154,16 +154,17 @@ const String streamingProxyPath = '/video';
 
 /// 流式解密节流延迟（毫秒）
 ///
-/// 每块解密输出后等待此时间，防止数据灌入速度远超 ExoPlayer 消费速度，
-/// 导致管道溢出（pipelineFull）、音频帧被丢弃、AudioTrack 暂停 → 卡死。
-/// 有效吞吐约 512KB ÷ 15ms ≈ 34MB/s，远高于视频播放所需 ~1MB/s。
+/// burst 块之后每块等待此时间，两个作用：
+/// 1. **事件循环让出**：processBytes 同步阻塞 ~25ms/块，节流提供确定性 await 点，
+///    让事件循环处理播放器的并发 Range 请求（音频轨+视频轨）。
+/// 2. **防止跑在播放器前面**：flush() 只等数据进入 OS socket 缓冲区，不等待播放器消费。
+///    无节流时解密器会超前解密大量播放器不需要的数据（"全量解密"现象）。
 ///
-/// 仅对解密路径生效；缓存命中路径不节流（内存数据不会溢出管道）。
-const int streamingThrottleDelayMs = 15;
+/// 从 15ms 降为 5ms（配合 cipher 复用），有效供数 ≈ 17MB/s，远高于视频播放所需。
+const int streamingThrottleDelayMs = 5;
 
 /// 流式解密爆发块数（免延迟）
 ///
-/// 前 16 块（512KB×16=8MB）零延迟发出，覆盖 ExoPlayer 绝大多数 Range 请求
-/// （通常 1-2MB），保证秒级起播、seek 后快速恢复、音频轨并发请求不被拖慢。
-/// 之后每块等待 [streamingThrottleDelayMs] 毫秒进入节流模式。
+/// 前 16 块（512KB×16=8MB）零延迟发出，覆盖 ExoPlayer 绝大多数 Range 请求，
+/// 保证秒级起播、seek 后快速恢复。
 const int streamingBurstBlocks = 16;

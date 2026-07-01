@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:pointycastle/api.dart';
 
 import '../config/crypto.dart';
 import '../utils/crypto_utils.dart';
@@ -280,6 +281,13 @@ class StreamingDecryptProxy {
   ///
   /// 每个请求独立打开加密文件句柄，消除并发 setPosition 竞态。
   /// 解密后的数据直接写入 HTTP 响应供播放器消费，不在磁盘落缓存。
+  ///
+  /// 性能优化：
+  /// - **cipher 复用**：CTR 模式连续 processBytes 自动递增 counter，
+  ///   顺序播放时同一请求内贯穿复用，仅 seek 跳转导致位置不连续时重建。
+  /// - **跳过冗余 setPosition**：顺序播放时文件句柄位置自然前进。
+  /// - **burst + 节流**：前 16 块零延迟（秒级起播），之后每块 5ms 节流，
+  ///   既给事件循环让出点处理并发请求，又防止解密器跑在播放器前面。
   Future<void> _decryptAndStream(
     HttpResponse response,
     int rangeStart,
@@ -294,6 +302,16 @@ class StreamingDecryptProxy {
 
     final buf = Uint8List(_decryptBlockSize);
     final procBuf = Uint8List(_decryptBlockSize);
+
+    // cipher 复用：CTR 流式 cipher 内部 counter 随 processBytes 自动递增。
+    // 顺序播放时所有块位置连续，cipher 贯穿整个请求复用，消除每块重建开销。
+    // cipherPos 跟踪 cipher 当前已解密到的明文偏移，不连续时重建。
+    StreamCipher? cipher;
+    int cipherPos = -1;
+
+    // 文件句柄位置跟踪：顺序播放时 readInto 自动前进位置，
+    // 仅当位置不匹配时才 setPosition，减少系统调用。
+    int lastFilePos = -1;
 
     final encFile = await File(_encPath).open(mode: FileMode.read);
 
@@ -331,13 +349,20 @@ class StreamingDecryptProxy {
         // 缓存未命中：解密
         final alignedStart = (currentPos ~/ aesBlockSize) * aesBlockSize;
         final skipBytes = currentPos - alignedStart;
-        final counterOffset = alignedStart ~/ aesBlockSize;
 
-        final adjustedIv = CryptoUtils.incrementCounter(_iv, counterOffset);
-        final cipher = CryptoUtils.createCtrCipher(_key, adjustedIv);
+        // 仅当 cipher 位置与当前对齐起点不一致时才重建
+        // （首次解密、seek 跳转、或缓存命中后位置不连续）
+        if (cipher == null || cipherPos != alignedStart) {
+          final counterOffset = alignedStart ~/ aesBlockSize;
+          final adjustedIv = CryptoUtils.incrementCounter(_iv, counterOffset);
+          cipher = CryptoUtils.createCtrCipher(_key, adjustedIv);
+        }
 
         final cipherFileOffset = headerSize + alignedStart;
-        await encFile.setPosition(cipherFileOffset);
+        // 顺序播放时文件句柄位置自然前进，仅位置不匹配时才 setPosition
+        if (cipherFileOffset != lastFilePos) {
+          await encFile.setPosition(cipherFileOffset);
+        }
 
         final totalDecryptLen = skipBytes + chunkLen;
         final readLen = totalDecryptLen < _decryptBlockSize
@@ -351,6 +376,10 @@ class StreamingDecryptProxy {
 
         // 解密
         cipher.processBytes(buf, 0, bytesRead, procBuf, 0);
+        // 更新 cipher 位置：CTR 模式 counter 已自动递进 bytesRead 字节
+        cipherPos = alignedStart + bytesRead;
+        // 更新文件句柄位置：readInto 已前进 bytesRead 字节
+        lastFilePos = cipherFileOffset + bytesRead;
 
         // 先输出 HTTP 响应（保证供数连续性）
         final outputStart = skipBytes;
@@ -383,7 +412,9 @@ class StreamingDecryptProxy {
         currentPos += outputLen;
 
         // 节流：前 burst 块零延迟（秒级起播），之后每块延迟 throttle ms
-        // 防止 localhost 回环 TCP 缓冲区吞掉 flush 背压，导致 ExoPlayer 管道溢出
+        // 两个作用：
+        // 1. 给事件循环让出点 — processBytes 同步阻塞 ~25ms/块，需让出处理并发 Range 请求
+        // 2. 防止解密器跑在播放器前面 — flush 只等数据进 socket 缓冲区，不等播放器消费
         final throttleDelay = blocksSent < streamingBurstBlocks
             ? Duration.zero
             : Duration(milliseconds: streamingThrottleDelayMs);
