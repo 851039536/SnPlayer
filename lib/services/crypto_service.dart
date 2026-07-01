@@ -32,7 +32,7 @@ class CryptoService {
     return key;
   }
 
-  /// 加密文件（自动选择串行或并行策略）
+  /// 加密文件（始终串行 Isolate 加密）
   ///
   /// [inputPath] 原始视频文件路径
   /// [outputPath] 加密输出路径（.enc）
@@ -42,17 +42,12 @@ class CryptoService {
     String outputPath, {
     void Function(double)? onProgress,
   }) async {
-    final fileSize = await File(inputPath).length();
-    if (fileSize >= parallelDecryptMinFileSize) {
-      await encryptFileParallel(inputPath, outputPath, onProgress: onProgress);
-    } else {
-      await _runInIsolate(
-        command: 'encrypt',
-        inputPath: inputPath,
-        outputPath: outputPath,
-        onProgress: onProgress,
-      );
-    }
+    await _runInIsolate(
+      command: 'encrypt',
+      inputPath: inputPath,
+      outputPath: outputPath,
+      onProgress: onProgress,
+    );
   }
 
   /// 并行分块加密文件

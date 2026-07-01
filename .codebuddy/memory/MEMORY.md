@@ -18,6 +18,9 @@
 - 视频列表页：VideoListScreen，懒加载缩略图，ActionSheet 菜单（播放/第三方播放/解密导出/重命名/移动/打开存储路径/删除）
 - 播放器：自建组件（player_gesture, player_progress_bar, speed_selector, player_controls）
 
+### 加密
+- 2026-07-01：将 `CryptoService.encryptFile` 强制改为串行 Isolate 加密，移除并行路径。因并行加密（`_runParallelEncrypt`）产物的文件头版本字节（偏移 32）实际为 0x00 而非预期的 0x02，导致 App 和第三方程序均解密失败。根因未确定（代码审查两条路径写入逻辑均正确），暂用串行路径规避。并行加密代码保留未删除。
+
 ### 代码规范
 - if 语句必须有花括号 `{}`，即使只有一行
 - 禁止私自执行 `dotnet build`，修改完代码由用户自行验证
