@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../utils/file_utils.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
-import '../theme/app_theme.dart';
+import '../theme/app_colors.dart';
 
 /// 存储统计弹窗
 class StorageStatsDialog extends StatelessWidget {
@@ -51,7 +51,7 @@ class StorageStatsDialog extends StatelessWidget {
             size: encSize,
             color: colorScheme.primary,
           ),
-          const SizedBox(height: AppSpacing.lg),
+          const SizedBox(height: AppSpacing.spacing4),
           _buildStatRow(
             context,
             icon: Icons.image_rounded,
@@ -60,7 +60,7 @@ class StorageStatsDialog extends StatelessWidget {
             size: tencSize,
             color: AppColors.success,
           ),
-          const SizedBox(height: AppSpacing.lg),
+          const SizedBox(height: AppSpacing.spacing4),
           _buildStatRow(
             context,
             icon: Icons.cached_rounded,
@@ -69,9 +69,9 @@ class StorageStatsDialog extends StatelessWidget {
             size: cacheSize,
             color: AppColors.warning,
           ),
-          const SizedBox(height: AppSpacing.xl),
+          const SizedBox(height: AppSpacing.spacing5),
           Divider(color: colorScheme.outlineVariant),
-          const SizedBox(height: AppSpacing.md),
+          const SizedBox(height: AppSpacing.spacing3),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -121,7 +121,7 @@ class StorageStatsDialog extends StatelessWidget {
           ),
           child: Icon(icon, color: color, size: 20),
         ),
-        const SizedBox(width: AppSpacing.lg),
+        const SizedBox(width: AppSpacing.spacing4),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../theme/app_colors.dart';
+import '../../theme/app_duration.dart';
+import '../../theme/app_font_size.dart';
 import '../../theme/app_spacing.dart';
 
 /// 增强进度条
@@ -37,17 +40,16 @@ class PlayerProgressBar extends StatelessWidget {
 
         return AnimatedOpacity(
           opacity: isVisible ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 200),
+          duration: AppDuration.standard,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing3),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 进度条
                 SizedBox(
                   height: 40,
                   child: Center(
-                    child:                     _BufferedSlider(
+                    child: _BufferedSlider(
                       progress: progress,
                       bufferedRanges: value.buffered,
                       duration: duration,
@@ -55,10 +57,9 @@ class PlayerProgressBar extends StatelessWidget {
                     ),
                   ),
                 ),
-                // 时间显示
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.md, 0, AppSpacing.md, AppSpacing.sm),
+                    AppSpacing.spacing3, 0, AppSpacing.spacing3, AppSpacing.spacing2),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -66,7 +67,7 @@ class PlayerProgressBar extends StatelessWidget {
                         _formatDuration(position),
                         style: const TextStyle(
                           color: Colors.white70,
-                          fontSize: 12,
+                          fontSize: AppFontSize.xs,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -74,7 +75,7 @@ class PlayerProgressBar extends StatelessWidget {
                         _formatDuration(duration),
                         style: const TextStyle(
                           color: Colors.white54,
-                          fontSize: 12,
+                          fontSize: AppFontSize.xs,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -94,7 +95,7 @@ class PlayerProgressBar extends StatelessWidget {
     final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     if (hours > 0) {
-      return '$hours:${minutes.toString().padLeft(2, '0')}:$seconds';
+      return '$hours:${minutes.padLeft(2, '0')}:$seconds';
     }
     return '$minutes:$seconds';
   }
@@ -153,7 +154,7 @@ class _BufferedSliderState extends State<_BufferedSlider> {
                 child: Container(
                   height: 4,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF6366F1), // Indigo 主色
+                    color: AppColors.brand,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -162,23 +163,15 @@ class _BufferedSliderState extends State<_BufferedSlider> {
               Positioned(
                 left: (_displayProgress.clamp(0.0, 1.0) * constraints.maxWidth) - 7,
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
+                  duration: AppDuration.standard,
                   width: _isDragging ? 18 : 14,
                   height: _isDragging ? 18 : 14,
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 4,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
                   ),
                 ),
               ),
-              // 点击/拖动区域（比轨道高以便触摸）
               SizedBox(
                 height: 40,
                 width: constraints.maxWidth,
@@ -222,7 +215,6 @@ class _BufferedSliderState extends State<_BufferedSlider> {
     final localPos = details.localPosition;
     final fraction = (localPos.dx / box.size.width).clamp(0.0, 1.0);
     final seekMs = (fraction * widget.duration.inMilliseconds).round();
-    // 单击：立即 seek（单次操作成本可控）
     widget.onSeek(Duration(milliseconds: seekMs));
   }
 
@@ -230,7 +222,6 @@ class _BufferedSliderState extends State<_BufferedSlider> {
     final box = context.findRenderObject() as RenderBox;
     final localPos = box.globalToLocal(details.globalPosition);
     final fraction = (localPos.dx / box.size.width).clamp(0.0, 1.0);
-    // 仅记录拖动起始状态，不 seek
     setState(() {
       _isDragging = true;
       _dragValue = fraction;
@@ -241,12 +232,10 @@ class _BufferedSliderState extends State<_BufferedSlider> {
     final box = context.findRenderObject() as RenderBox;
     final localPos = box.globalToLocal(details.globalPosition);
     final fraction = (localPos.dx / box.size.width).clamp(0.0, 1.0);
-    // 仅更新 UI 预览，不 seek（避免加密视频频繁 seek 导致解码器卡死）
     setState(() => _dragValue = fraction);
   }
 
   void _onDragEnd(DragEndDetails details) {
-    // 松手时才执行一次 seek
     final seekMs = (_dragValue * widget.duration.inMilliseconds).round();
     setState(() => _isDragging = false);
     widget.onSeek(Duration(milliseconds: seekMs));

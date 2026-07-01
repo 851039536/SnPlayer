@@ -8,6 +8,8 @@ import '../services/safe_delete_helper.dart';
 import '../services/path_provider_service.dart';
 import '../services/playback_cache_manager.dart';
 import '../services/streaming_decrypt_proxy.dart';
+import '../theme/app_font_size.dart';
+import '../theme/app_font_size.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/player/player_gesture.dart';
 import '../widgets/player/player_controls.dart';
@@ -212,7 +214,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         widget.title,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 16,
+          fontSize: AppFontSize.base,
         ),
       ),
     );
@@ -224,10 +226,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           CircularProgressIndicator(color: Colors.white70),
-          SizedBox(height: AppSpacing.xl),
+          SizedBox(height: AppSpacing.spacing5),
           Text(
             '准备播放...',
-            style: TextStyle(color: Colors.white70, fontSize: 15),
+            style: TextStyle(color: Colors.white70, fontSize: AppFontSize.sm),
           ),
         ],
       );
@@ -238,13 +240,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const Icon(Icons.error_outline, size: 48, color: Colors.white70),
-          const SizedBox(height: AppSpacing.xl),
+          const SizedBox(height: AppSpacing.spacing5),
           Text(
             _error!,
             style: const TextStyle(color: Colors.white70, fontSize: 15),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: AppSpacing.xxxl),
+          const SizedBox(height: AppSpacing.spacing7),
           ElevatedButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('返回'),

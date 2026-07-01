@@ -6,6 +6,7 @@ import '../models/video_item.dart';
 import '../config/crypto.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
+import '../theme/app_sizes.dart';
 
 /// 视频卡片组件
 ///
@@ -40,7 +41,7 @@ class VideoCard extends StatelessWidget {
             // 信息区域
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, AppSpacing.xs),
+                  AppSpacing.spacing2, AppSpacing.spacing2, AppSpacing.spacing2, AppSpacing.spacing1),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -53,16 +54,16 @@ class VideoCard extends StatelessWidget {
                           fontWeight: FontWeight.w500,
                         ),
                   ),
-                  const SizedBox(height: AppSpacing.xs),
+                  const SizedBox(height: AppSpacing.spacing1),
                   // 文件大小 + 时间
                   Row(
                     children: [
                       Icon(
                         Icons.movie_outlined,
-                        size: 14,
+                        size: AppSizes.iconSm,
                         color: colorScheme.onSurfaceVariant,
                       ),
-                      const SizedBox(width: AppSpacing.xs),
+                      const SizedBox(width: AppSpacing.spacing1),
                       Expanded(
                         child: Text(
                           video.formattedSize,
@@ -75,20 +76,20 @@ class VideoCard extends StatelessWidget {
                         ),
                       ),
                       if (processingState != null) ...[
-                        const SizedBox(width: AppSpacing.xs),
+                        const SizedBox(width: AppSpacing.spacing1),
                         _ProcessingBadge(state: processingState!),
                       ],
                     ],
                   ),
                   if (video.folderName != null) ...[
-                    const SizedBox(height: AppSpacing.xs),
+                    const SizedBox(height: AppSpacing.spacing1),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.sm, vertical: 2),
+                          horizontal: AppSpacing.spacing2, vertical: 2),
                       decoration: BoxDecoration(
                         color: colorScheme.secondaryContainer
                             .withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(AppRadius.xs),
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
                       ),
                       child: Text(
                         video.folderName!,
@@ -131,16 +132,16 @@ class VideoCard extends StatelessWidget {
           Positioned.fill(
             child: Center(
               child: Container(
-                width: 44,
-                height: 44,
+                width: AppSizes.iconButtonMd,
+                height: AppSizes.iconButtonMd,
                 decoration: BoxDecoration(
                   color: Colors.black54,
-                  borderRadius: BorderRadius.circular(22),
+                  borderRadius: BorderRadius.circular(AppSizes.iconButtonMd / 2),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.play_arrow_rounded,
                   color: Colors.white,
-                  size: 28,
+                  size: AppSizes.iconXl,
                 ),
               ),
             ),
@@ -165,7 +166,7 @@ class VideoCard extends StatelessWidget {
       child: Center(
         child: Icon(
           Icons.video_library_rounded,
-          size: 48,
+          size: AppSizes.iconXxl,
           color: colorScheme.onSurface.withValues(alpha: 0.2),
         ),
       ),
@@ -186,12 +187,12 @@ class _ProcessingBadge extends StatelessWidget {
 
     return Container(
       padding:
-          const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 2),
+          const EdgeInsets.symmetric(horizontal: AppSpacing.spacing2, vertical: 2),
       decoration: BoxDecoration(
         color: isError
             ? colorScheme.errorContainer.withValues(alpha: 0.8)
             : colorScheme.primaryContainer.withValues(alpha: 0.8),
-        borderRadius: BorderRadius.circular(AppRadius.xs),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -207,8 +208,8 @@ class _ProcessingBadge extends StatelessWidget {
             )
           else
             Icon(Icons.error_outline,
-                size: 12, color: colorScheme.onErrorContainer),
-          const SizedBox(width: AppSpacing.xs),
+                size: AppSizes.iconXxs, color: colorScheme.onErrorContainer),
+          const SizedBox(width: AppSpacing.spacing1),
           Text(
             state,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(

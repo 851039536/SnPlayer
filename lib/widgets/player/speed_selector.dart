@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../theme/app_colors.dart';
+import '../../theme/app_duration.dart';
+import '../../theme/app_font_size.dart';
+import '../../theme/app_radius.dart';
+import '../../theme/app_spacing.dart';
+
 /// 倍速选择底部弹窗
 ///
 /// 显示 6 档播放速度选项（0.5x ~ 2.0x），当前速度高亮。
@@ -47,10 +53,10 @@ class SpeedSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(AppSpacing.spacing6),
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E2E),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(AppRadius.xxl)),
         border: Border(
           top: BorderSide(
             color: Colors.white.withValues(alpha: 0.1),
@@ -70,16 +76,16 @@ class SpeedSelector extends StatelessWidget {
                 '播放速度',
                 style: TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
+                  fontSize: AppFontSize.base,
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.spacing5),
             // 速度网格
             Wrap(
-              spacing: 12,
-              runSpacing: 12,
+              spacing: AppSpacing.spacing4,
+              runSpacing: AppSpacing.spacing4,
               alignment: WrapAlignment.center,
               children: _speeds.map((speed) {
                 final isSelected = currentSpeed == speed;
@@ -89,14 +95,14 @@ class SpeedSelector extends StatelessWidget {
                     Navigator.pop(context);
                   },
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
+                    duration: AppDuration.standard,
                     width: (MediaQuery.of(context).size.width - 88) / 3,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     decoration: BoxDecoration(
                       color: isSelected
-                          ? const Color(0xFF6366F1)
+                          ? AppColors.brand
                           : Colors.white.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(AppRadius.lg),
                       border: isSelected
                           ? null
                           : Border.all(
@@ -108,7 +114,7 @@ class SpeedSelector extends StatelessWidget {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: isSelected ? Colors.white : Colors.white70,
-                        fontSize: 15,
+                        fontSize: AppFontSize.sm,
                         fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                       ),
                     ),
@@ -116,7 +122,7 @@ class SpeedSelector extends StatelessWidget {
                 );
               }).toList(),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.spacing3),
           ],
         ),
       ),

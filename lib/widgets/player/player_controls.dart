@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../theme/app_colors.dart';
+import '../../theme/app_font_size.dart';
+import '../../theme/app_sizes.dart';
 import '../../theme/app_spacing.dart';
 import 'player_progress_bar.dart';
 import 'speed_selector.dart';
@@ -82,10 +85,6 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 
   /// seek 后确保恢复播放
-  ///
-  /// 流式代理 seek 时 ExoPlayer 进入 buffering 状态，直接调用 play() 可能被忽略。
-  /// 延迟 300ms 后检查并恢复播放。使用 Timer 字段管理，每次调用取消上一次的
-  /// 延迟回调，避免频繁操作时回调堆积反复调用 play()。
   void _ensurePlayAfterSeek() {
     _playAfterSeekTimer?.cancel();
     _playAfterSeekTimer = Timer(const Duration(milliseconds: 300), () {
@@ -115,29 +114,24 @@ class _PlayerControlsState extends State<PlayerControls> {
         ),
       ),
       padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).padding.bottom + AppSpacing.sm,
+        bottom: MediaQuery.of(context).padding.bottom + AppSpacing.spacing2,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 进度条区域
           PlayerProgressBar(
             controller: widget.controller,
             isVisible: true,
           ),
-          // 控制按钮行
           Padding(
             padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.xl,
+              horizontal: AppSpacing.spacing5,
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // 左侧：倍速
                 _buildLeftButtons(),
-                // 中间：快退 + 播放暂停 + 快进
                 _buildCenterButtons(),
-                // 右侧：全屏
                 _buildRightButtons(),
               ],
             ),
@@ -154,9 +148,9 @@ class _PlayerControlsState extends State<PlayerControls> {
         _speedLabel(),
         style: TextStyle(
           color: _currentSpeed != 1.0
-              ? const Color(0xFF6366F1)
+              ? AppColors.brand
               : Colors.white70,
-          fontSize: 12,
+          fontSize: AppFontSize.xs,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -170,27 +164,24 @@ class _PlayerControlsState extends State<PlayerControls> {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 快退 10s
             _ControlButton(
               onTap: _skipBack,
               child: const Text(
                 '-10s',
                 style: TextStyle(
                   color: Colors.white70,
-                  fontSize: 11,
+                  fontSize: AppFontSize.xs,
                   fontWeight: FontWeight.w500,
                 ),
               ),
             ),
-            const SizedBox(width: AppSpacing.lg),
-            // 播放/暂停
+            const SizedBox(width: AppSpacing.spacing4),
             GestureDetector(
               onTap: () {
                 if (value.isPlaying) {
                   widget.controller.pause();
                 } else {
                   widget.controller.play();
-                  // 流式代理下 play() 可能因 buffering 被忽略，延迟重试
                   _playRetryTimer?.cancel();
                   _playRetryTimer = Timer(const Duration(milliseconds: 500), () {
                     if (mounted && !widget.controller.value.isPlaying) {
@@ -201,8 +192,8 @@ class _PlayerControlsState extends State<PlayerControls> {
                 setState(() {});
               },
               child: Container(
-                width: 44,
-                height: 44,
+                width: AppSizes.iconButtonMd,
+                height: AppSizes.iconButtonMd,
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.15),
                   shape: BoxShape.circle,
@@ -212,19 +203,18 @@ class _PlayerControlsState extends State<PlayerControls> {
                       ? Icons.pause_rounded
                       : Icons.play_arrow_rounded,
                   color: Colors.white,
-                  size: 28,
+                  size: AppSizes.iconXl,
                 ),
               ),
             ),
-            const SizedBox(width: AppSpacing.lg),
-            // 快进 10s
+            const SizedBox(width: AppSpacing.spacing4),
             _ControlButton(
               onTap: _skipForward,
               child: const Text(
                 '+10s',
                 style: TextStyle(
                   color: Colors.white70,
-                  fontSize: 11,
+                  fontSize: AppFontSize.xs,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -243,7 +233,6 @@ class _PlayerControlsState extends State<PlayerControls> {
   }
 }
 
-/// 控制按钮基础组件
 class _ControlButton extends StatelessWidget {
   final VoidCallback? onTap;
   final IconData? icon;
@@ -261,12 +250,12 @@ class _ControlButton extends StatelessWidget {
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
+        padding: const EdgeInsets.all(AppSpacing.spacing3),
         child: child ??
             Icon(
               icon,
               color: Colors.white70,
-              size: 20,
+              size: AppSizes.iconSm,
             ),
       ),
     );

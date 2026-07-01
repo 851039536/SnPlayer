@@ -20,9 +20,11 @@ import '../widgets/video_card.dart';
 import '../widgets/folder_tabs.dart';
 import '../widgets/action_sheet.dart';
 import '../widgets/storage_stats_dialog.dart';
-import '../theme/app_spacing.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_font_size.dart';
 import '../theme/app_radius.dart';
-import '../theme/app_theme.dart';
+import '../theme/app_sizes.dart';
+import '../theme/app_spacing.dart';
 import 'video_player_screen.dart';
 import 'folder_manage_screen.dart';
 
@@ -63,8 +65,8 @@ class _VideoListScreenState extends State<VideoListScreen> {
     final crossAxisCount = 2;
     // 估算每项高度：网格宽度 / 列数 * aspectRatio
     final screenWidth = MediaQuery.of(context).size.width;
-    final padding = AppSpacing.lg * 2; // grid padding left+right
-    final spacing = AppSpacing.md * (crossAxisCount - 1);
+    final padding = AppSpacing.spacing4 * 2; // grid padding left+right
+    final spacing = AppSpacing.spacing3 * (crossAxisCount - 1);
     final itemWidth = (screenWidth - padding - spacing) / crossAxisCount;
     final itemHeight = itemWidth; // childAspectRatio: 1.0
 
@@ -73,7 +75,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
     // 计算可见范围（含预加载行）
     final itemsPerRow = crossAxisCount;
-    final rowHeight = itemHeight + AppSpacing.md; // 含 mainAxisSpacing
+    final rowHeight = itemHeight + AppSpacing.spacing3; // 含 mainAxisSpacing
     final firstVisibleRow = (scrollOffset / rowHeight).floor();
     final visibleRows = (viewportHeight / rowHeight).ceil() + 1; // +1 容错
 
@@ -134,7 +136,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const CircularProgressIndicator(),
-              const SizedBox(height: AppSpacing.xl),
+              const SizedBox(height: AppSpacing.spacing5),
               Text('正在初始化...',
                 style: TextStyle(color: colorScheme.onSurfaceVariant),
               ),
@@ -149,25 +151,25 @@ class _VideoListScreenState extends State<VideoListScreen> {
         backgroundColor: colorScheme.surface,
         body: Center(
           child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.huge),
+            padding: const EdgeInsets.all(AppSpacing.spacing8),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(Icons.folder_off_rounded, size: 72,
                   color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),
-                const SizedBox(height: AppSpacing.xxxl),
+                const SizedBox(height: AppSpacing.spacing7),
                 Text('需要存储权限才能访问视频文件',
                   style: Theme.of(context).textTheme.titleMedium,
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: AppSpacing.md),
+                const SizedBox(height: AppSpacing.spacing3),
                 Text('请在设置中授予存储权限',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: AppSpacing.xxxl),
+                const SizedBox(height: AppSpacing.spacing7),
                 FilledButton.icon(
                   onPressed: _initApp,
                   icon: const Icon(Icons.security_rounded),
@@ -265,14 +267,14 @@ class _VideoListScreenState extends State<VideoListScreen> {
                   Icon(Icons.video_library_outlined, size: 64,
                     color: Theme.of(context)
                         .colorScheme.onSurfaceVariant.withValues(alpha: 0.3)),
-                  const SizedBox(height: AppSpacing.xl),
+                  const SizedBox(height: AppSpacing.spacing5),
                   Text(
                     '还没有加密视频',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.md),
+                  const SizedBox(height: AppSpacing.spacing3),
                   Text(
                     '点击右上角 + 开始加密',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -288,12 +290,12 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
         return SliverPadding(
           padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.md),
+              AppSpacing.spacing3, AppSpacing.spacing2, AppSpacing.spacing3, AppSpacing.spacing3),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
-              mainAxisSpacing: AppSpacing.sm,
-              crossAxisSpacing: AppSpacing.sm,
+              mainAxisSpacing: AppSpacing.spacing2,
+              crossAxisSpacing: AppSpacing.spacing2,
               childAspectRatio: 1.0,
             ),
             delegate: SliverChildBuilderDelegate(
@@ -326,9 +328,9 @@ class _VideoListScreenState extends State<VideoListScreen> {
           onTap: _showStorageStats,
           child: Container(
             margin: const EdgeInsets.fromLTRB(
-              AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.sm),
+              AppSpacing.spacing4, 0, AppSpacing.spacing4, AppSpacing.spacing2),
             padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.lg, vertical: AppSpacing.xs),
+              horizontal: AppSpacing.spacing4, vertical: AppSpacing.spacing1),
             decoration: BoxDecoration(
               color: colorScheme.surfaceContainerHigh.withValues(alpha: 0.9),
               borderRadius: BorderRadius.circular(AppRadius.xl),
@@ -338,9 +340,9 @@ class _VideoListScreenState extends State<VideoListScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(Icons.videocam_rounded,
-                  size: AppSpacing.xl,
+                  size: AppSizes.iconSm,
                   color: colorScheme.primary),
-                const SizedBox(width: AppSpacing.sm),
+                const SizedBox(width: AppSpacing.spacing2),
                 Text(
                   '${videos.length} 个加密视频 · ${FileUtils.formatFileSize(totalSize)}',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -446,7 +448,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
         ActionSheetItem(
           icon: Icons.info_outline_rounded,
           label: '详细信息',
-          color: const Color(0xFF6366F1),
+          color: AppColors.brand,
           onTap: () => _showVideoDetail(video),
         ),
         // 打开存储路径
@@ -739,7 +741,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
           child: ConstrainedBox(
             constraints: BoxConstraints(maxHeight: maxHeight),
             child: SingleChildScrollView(
-              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              padding: const EdgeInsets.only(bottom: AppSpacing.spacing2),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -747,7 +749,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
                   Center(
                     child: Container(
                       margin: const EdgeInsets.only(
-                        top: AppSpacing.sm, bottom: AppSpacing.sm),
+                        top: AppSpacing.spacing2, bottom: AppSpacing.spacing2),
                       width: 32,
                       height: 4,
                       decoration: BoxDecoration(
@@ -761,23 +763,23 @@ class _VideoListScreenState extends State<VideoListScreen> {
                   // 标题区
                   Padding(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.xxl, vertical: AppSpacing.sm),
+                      horizontal: AppSpacing.spacing6, vertical: AppSpacing.spacing2),
                     child: Row(
                       children: [
                         Container(
                           width: 40,
                           height: 40,
                           decoration: BoxDecoration(
-                            color: const Color(0xFF6366F1).withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(AppRadius.md + 4),
+                            color: AppColors.brand.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(AppRadius.lg),
                           ),
                           child: const Icon(
                             Icons.info_outline_rounded,
-                            color: Color(0xFF6366F1),
+                            color: AppColors.brand,
                             size: 22,
                           ),
                         ),
-                        const SizedBox(width: AppSpacing.lg),
+                        const SizedBox(width: AppSpacing.spacing4),
                         Expanded(
                           child: Text(
                             video.displayName,
@@ -818,17 +820,17 @@ class _VideoListScreenState extends State<VideoListScreen> {
                   ),
 
                   // 取消按钮
-                  const SizedBox(height: AppSpacing.sm),
+                  const SizedBox(height: AppSpacing.spacing2),
                   Padding(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.lg),
+                      horizontal: AppSpacing.spacing4),
                     child: SizedBox(
                       width: double.infinity,
                       child: OutlinedButton(
                         onPressed: () => Navigator.pop(ctx),
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(
-                            vertical: AppSpacing.md),
+                            vertical: AppSpacing.spacing3),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(AppRadius.lg),
                           ),
@@ -857,14 +859,14 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
     return Padding(
       padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.xxl,
-        vertical: AppSpacing.md,
+        horizontal: AppSpacing.spacing6,
+        vertical: AppSpacing.spacing3,
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon, size: 18, color: colorScheme.onSurfaceVariant),
-          const SizedBox(width: AppSpacing.lg),
+          const SizedBox(width: AppSpacing.spacing4),
           SizedBox(
             width: 72,
             child: Text(
@@ -874,7 +876,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
               ),
             ),
           ),
-          const SizedBox(width: AppSpacing.md),
+          const SizedBox(width: AppSpacing.spacing3),
           Expanded(
             child: Text(
               value,

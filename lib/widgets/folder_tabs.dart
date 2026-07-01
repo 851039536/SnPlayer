@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/video_folder.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
+import '../theme/app_sizes.dart';
 import '../utils/color_utils.dart';
 
 /// 文件夹标签栏组件
@@ -33,7 +34,7 @@ class FolderTabs extends StatelessWidget {
           Expanded(
             child: ListView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing4),
               children: [
                 // "全部" 标签
                 _buildTab(
@@ -63,12 +64,12 @@ class FolderTabs extends StatelessWidget {
           // 文件夹管理按钮
           if (onManage != null)
             Padding(
-              padding: const EdgeInsets.only(right: AppSpacing.xs),
+              padding: const EdgeInsets.only(right: AppSpacing.spacing1),
               child: IconButton(
                 icon: Icon(
                   Icons.folder_rounded,
                   color: colorScheme.onSurfaceVariant,
-                  size: 22,
+                  size: AppSizes.iconMd,
                 ),
                 tooltip: '管理文件夹',
                 onPressed: onManage,
@@ -94,12 +95,12 @@ class FolderTabs extends StatelessWidget {
       onLongPress: onLongPress,
       child: Container(
         margin: const EdgeInsets.only(
-          right: AppSpacing.md,
-          top: AppSpacing.xs,
-          bottom: AppSpacing.xs,
+          right: AppSpacing.spacing3,
+          top: AppSpacing.spacing1,
+          bottom: AppSpacing.spacing1,
         ),
         padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+          horizontal: AppSpacing.spacing4, vertical: AppSpacing.spacing2),
         decoration: BoxDecoration(
           color: isSelected
               ? color.withValues(alpha: 0.2)
@@ -107,7 +108,7 @@ class FolderTabs extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadius.xxl),
           border: Border.all(
             color: isSelected ? color : Colors.transparent,
-            width: 1.5,
+            width: 1.0,
           ),
         ),
         child: Center(

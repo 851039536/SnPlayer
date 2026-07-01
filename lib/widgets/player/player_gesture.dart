@@ -3,6 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../theme/app_duration.dart';
+import '../../theme/app_font_size.dart';
+import '../../theme/app_radius.dart';
+import '../../theme/app_sizes.dart';
+import '../../theme/app_spacing.dart';
 import '../../utils/file_utils.dart';
 
 /// 手势检测层
@@ -221,15 +226,15 @@ class _PlayerGestureState extends State<PlayerGesture> {
           Center(
             child: AnimatedOpacity(
               opacity: _showSkipIndicator ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 200),
+              duration: AppDuration.standard,
               child: Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
+                  horizontal: AppSpacing.spacing7,
+                  vertical: AppSpacing.spacing4,
                 ),
                 decoration: BoxDecoration(
                   color: Colors.black54,
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(AppRadius.xl),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -241,12 +246,12 @@ class _PlayerGestureState extends State<PlayerGesture> {
                       color: Colors.white,
                       size: 24,
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: AppSpacing.spacing3),
                     Text(
                       _skipText,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 18,
+                        fontSize: AppFontSize.lg,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -261,12 +266,12 @@ class _PlayerGestureState extends State<PlayerGesture> {
           Center(
             child: Container(
               padding: const EdgeInsets.symmetric(
-                horizontal: 20,
+                horizontal: AppSpacing.spacing6,
                 vertical: 10,
               ),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.75),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(AppRadius.lg),
               ),
               child: Text(
                 FileUtils.formatDuration(_dragTargetPosition!),

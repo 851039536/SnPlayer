@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
+import '../theme/app_sizes.dart';
 
 /// 操作菜单项
 class ActionSheetItem {
@@ -58,7 +59,7 @@ class ActionSheet extends StatelessWidget {
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
         child: SingleChildScrollView(
-          padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+          padding: const EdgeInsets.only(bottom: AppSpacing.spacing2),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -66,7 +67,7 @@ class ActionSheet extends StatelessWidget {
               Center(
                 child: Container(
                   margin: const EdgeInsets.only(
-                    top: AppSpacing.sm, bottom: AppSpacing.sm),
+                    top: AppSpacing.spacing2, bottom: AppSpacing.spacing2),
                   width: 32,
                   height: 4,
                   decoration: BoxDecoration(
@@ -80,7 +81,7 @@ class ActionSheet extends StatelessWidget {
               if (title != null) ...[
                 Padding(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.xxl, vertical: AppSpacing.sm),
+                    horizontal: AppSpacing.spacing6, vertical: AppSpacing.spacing2),
                   child: Text(
                     title!,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -95,16 +96,16 @@ class ActionSheet extends StatelessWidget {
               ...items.map((item) => _buildItem(context, item)),
 
               // 取消按钮
-              const SizedBox(height: AppSpacing.sm),
+              const SizedBox(height: AppSpacing.spacing2),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing4),
                 child: SizedBox(
                   width: double.infinity,
                   child: OutlinedButton(
                     onPressed: () => Navigator.pop(context),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
-                        vertical: AppSpacing.md),
+                        vertical: AppSpacing.spacing3),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadius.lg),
                       ),
@@ -130,23 +131,23 @@ class ActionSheet extends StatelessWidget {
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.xl, vertical: AppSpacing.md),
+          horizontal: AppSpacing.spacing5, vertical: AppSpacing.spacing3),
         child: Row(
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: AppSizes.iconButtonSm,
+              height: AppSizes.iconButtonSm,
               decoration: BoxDecoration(
                 color: (item.color ?? colorScheme.primary).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(AppRadius.sm + 4),
+                borderRadius: BorderRadius.circular(AppRadius.md),
               ),
               child: Icon(
                 item.icon,
                 color: item.color ?? colorScheme.primary,
-                size: 20,
+                size: AppSizes.iconSm,
               ),
             ),
-            const SizedBox(width: AppSpacing.lg),
+            const SizedBox(width: AppSpacing.spacing4),
             Text(
               item.label,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(

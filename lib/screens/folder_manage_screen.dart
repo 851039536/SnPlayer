@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
-import '../theme/app_theme.dart';
+import '../theme/app_sizes.dart';
 import '../utils/color_utils.dart';
 
 /// 文件夹管理页面（BottomSheet）
@@ -37,7 +38,7 @@ class FolderManageSheet extends StatefulWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-      shape: RoundedRectangleBorder(
+      shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(AppRadius.xxl)),
       ),
@@ -64,7 +65,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(bottom: AppSpacing.xl),
+        padding: const EdgeInsets.only(bottom: AppSpacing.spacing5),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -73,7 +74,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
             Center(
               child: Container(
                 margin: EdgeInsets.only(
-                  top: AppSpacing.md, bottom: AppSpacing.xl),
+                  top: AppSpacing.spacing3, bottom: AppSpacing.spacing5),
                 width: 32,
                 height: 4,
                 decoration: BoxDecoration(
@@ -85,7 +86,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
 
             // 标题行
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing6),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -97,19 +98,19 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                   ),
                   TextButton.icon(
                     onPressed: () => _showCreateDialog(context),
-                    icon: const Icon(Icons.add, size: 18),
+                    icon: const Icon(Icons.add, size: AppSizes.iconLg),
                     label: const Text('新建'),
                   ),
                 ],
               ),
             ),
 
-            SizedBox(height: AppSpacing.md),
+            SizedBox(height: AppSpacing.spacing3),
 
             // 文件夹列表
             if (widget.folders.isEmpty)
               Padding(
-                padding: const EdgeInsets.all(AppSpacing.huge),
+                padding: const EdgeInsets.all(AppSpacing.spacing8),
                 child: Text(
                   '还没有文件夹，点击右上角创建一个吧',
                   textAlign: TextAlign.center,
@@ -122,9 +123,9 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
               ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing5),
                 itemCount: widget.folders.length,
-                separatorBuilder: (_, __) => SizedBox(height: AppSpacing.md),
+                separatorBuilder: (_, __) => SizedBox(height: AppSpacing.spacing3),
                 itemBuilder: (context, index) {
                   final folder = widget.folders[index];
                   return _buildFolderRow(context, folder);
@@ -147,13 +148,13 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
       ),
       child: ListTile(
         leading: Container(
-          width: 36,
-          height: 36,
+          width: AppSizes.iconButtonSm,
+          height: AppSizes.iconButtonSm,
           decoration: BoxDecoration(
             color: color.withOpacity(0.2),
             borderRadius: BorderRadius.circular(AppRadius.md),
           ),
-          child: Icon(Icons.folder_rounded, color: color, size: 22),
+          child: Icon(Icons.folder_rounded, color: color, size: AppSizes.iconMd),
         ),
         title: Text(folder.displayName),
         subtitle: Text('${folder.videoCount} 个视频',
@@ -210,9 +211,9 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                 ),
                 autofocus: true,
               ),
-              SizedBox(height: AppSpacing.lg),
+              SizedBox(height: AppSpacing.spacing4),
               Wrap(
-                spacing: AppSpacing.md,
+                spacing: AppSpacing.spacing3,
                 children: _presetColors.map((color) {
                   final parsed = ColorUtils.parseHexColor(color);
                   return GestureDetector(
@@ -309,8 +310,8 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
       builder: (ctx) => AlertDialog(
         title: const Text('修改颜色'),
         content: Wrap(
-          spacing: AppSpacing.lg,
-          runSpacing: AppSpacing.lg,
+          spacing: AppSpacing.spacing4,
+          runSpacing: AppSpacing.spacing4,
           children: _presetColors.map((color) {
             final parsed = ColorUtils.parseHexColor(color);
             final isSelected = folder.color == color;
@@ -322,8 +323,8 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                 }
               },
               child: Container(
-                width: 44,
-                height: 44,
+                width: AppSizes.iconButtonMd,
+                height: AppSizes.iconButtonMd,
                 decoration: BoxDecoration(
                   color: parsed,
                   shape: BoxShape.circle,
@@ -335,7 +336,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                   ),
                 ),
                 child: isSelected
-                    ? Icon(Icons.check, color: colorScheme.onSurface, size: 20)
+                    ? Icon(Icons.check, color: colorScheme.onSurface, size: AppSizes.iconSm)
                     : null,
               ),
             );
