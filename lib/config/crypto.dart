@@ -130,10 +130,11 @@ const int streamingChunkSize = 256 * 1024;
 /// 解密后的数据按此粒度缓存，seek 回退或重复请求时直接命中内存。
 const int streamingBlockSize = 4 * 1024 * 1024;
 
-/// 内存块缓存上限（16 块 × 4MB = 64MB）
+/// 内存块缓存上限（128 块 × 512KB = 64MB）
 ///
 /// LRU 策略淘汰最久未访问的块，控制内存占用。
-const int streamingMaxCacheBlocks = 16;
+/// 块粒度随 _decryptBlockSize 调整为 512KB，块数相应增加以维持总量。
+const int streamingMaxCacheBlocks = 128;
 
 /// 磁盘播放缓存总上限（500MB）
 ///

@@ -286,22 +286,13 @@ class StreamingDecryptProxy {
     return _Range(start, end);
   }
 
-  /// 解密块大小（2MB）
-  static const int _decryptBlockSize = 2 * 1024 * 1024;
-
-  /// 初始连续冲刷阈值（4MB）
+  /// 解密块大小（512KB）
   ///
-  /// seek 到远处时播放器需要快速填充解码器缓冲区。
-  /// 前 4MB 连续输出不让出事件循环，保证首段数据快速就绪。
-  /// 从 16MB 降为 4MB：seek 后新 Range 请求时避免瞬间灌满解码器管道
-  /// 导致 pipelineFull（解码器管道容量约 6 帧，16MB burst 会使 ExoPlayer
-  /// 快速读入后堆积过多帧）。
-  static const int _initialBurstSize = 4 * 1024 * 1024;
-
-  /// 稳定期让出间隔（16MB）
-  ///
-  /// 超过 [ _initialBurstSize] 后每 16MB 让出一次，平衡吞吐量和 UI 响应。
-  static const int _yieldInterval = 16 * 1024 * 1024;
+  /// 从 2MB 降为 512KB：每块同步解密时间从 ~100ms 降至 ~25ms，
+  /// 减少单次事件循环阻塞时长，使并发 Range 请求响应更及时。
+  /// 大文件（700MB+）下 2MB 块的 100ms 阻塞会导致 ExoPlayer
+  /// 音频轨 Range 请求排队等待，引发 AudioTrack 供数不足 → 暂停 → 卡死。
+  static const int _decryptBlockSize = 512 * 1024;
 
   /// 解密并流式输出指定范围的数据
   ///
@@ -328,9 +319,9 @@ class StreamingDecryptProxy {
         final chunkLen =
             remaining < _decryptBlockSize ? remaining : _decryptBlockSize;
 
-        // 检查内存块缓存
-        final blockIndex = currentPos ~/ streamingBlockSize;
-        final blockOffset = currentPos % streamingBlockSize;
+        // 检查内存块缓存（以 _decryptBlockSize 为粒度）
+        final blockIndex = currentPos ~/ _decryptBlockSize;
+        final blockOffset = currentPos % _decryptBlockSize;
         final cachedBlock = _blockCache.get(blockIndex);
 
         if (cachedBlock != null) {
@@ -343,6 +334,9 @@ class StreamingDecryptProxy {
 
           if (actualCopyLen > 0) {
             response.add(cachedBlock.sublist(srcStart, actualEnd));
+            // flush 提供背压：等待数据写入 socket 后再继续，
+            // 避免大文件全量排队内存爆炸 + 突发灌满 ExoPlayer 管道
+            await response.flush();
             remaining -= actualCopyLen;
             currentPos += actualCopyLen;
           }
@@ -351,10 +345,8 @@ class StreamingDecryptProxy {
             continue;
           }
 
-          // 前 16MB 零让出连续冲刷，之后每 16MB 让出一次
-          if (_shouldYield(contentLength - remaining)) {
-            await Future.delayed(Duration.zero);
-          }
+          // 每块让出事件循环，允许并发 Range 请求被处理
+          await Future.delayed(Duration.zero);
           continue;
         }
 
@@ -389,46 +381,35 @@ class StreamingDecryptProxy {
 
         if (outputLen > 0) {
           // 必须拷贝 — sublist 是视图，下轮解密会覆盖 procBuf。
-          // 使用默认缓冲模式时 response.add 的数据可能延迟发送，
-          // 未发送的数据被覆盖会产生重复/错乱内容，导致解码器卡死。
           response.add(Uint8List.fromList(
               procBuf.sublist(outputStart, outputEnd)));
+          // flush 提供背压：等待数据写入 socket 后再解密下一块，
+          // 避免大文件（700MB+）全量排队内存爆炸 + 突发灌满 ExoPlayer 管道
+          // 导致 pipelineFull + AudioTrack 供数不足 → 卡死
+          await response.flush();
         }
 
-        // 更新内存块缓存（仅缓存整块）
-        final currentBlockIndex = alignedStart ~/ streamingBlockSize;
-        final blockStartAligned = currentBlockIndex * streamingBlockSize;
+        // 更新内存块缓存（仅缓存整块，512KB 粒度）
+        final currentBlockIndex = alignedStart ~/ _decryptBlockSize;
+        final blockStartAligned = currentBlockIndex * _decryptBlockSize;
         if (alignedStart == blockStartAligned &&
-            bytesRead >= streamingBlockSize) {
+            bytesRead >= _decryptBlockSize) {
           _blockCache.put(
             currentBlockIndex,
             Uint8List.fromList(
-                procBuf.sublist(0, streamingBlockSize)),
+                procBuf.sublist(0, _decryptBlockSize)),
           );
         }
 
         remaining -= outputLen;
         currentPos += outputLen;
 
-        // 前 16MB 零让出连续冲刷，之后每 16MB 让出一次
-        if (_shouldYield(contentLength - remaining)) {
-          await Future.delayed(Duration.zero);
-        }
+        // 每块让出事件循环，允许并发 Range 请求被处理
+        await Future.delayed(Duration.zero);
       }
     } finally {
       await encFile.close();
     }
-  }
-
-  /// 判断当前是否应该让出事件循环
-  ///
-  /// 前 [_initialBurstSize]（4MB）连续输出不让出，保证 seek 后快速填满缓冲区。
-  /// 之后每 [_yieldInterval]（16MB）让出一次，平衡吞吐量和 UI 响应。
-  bool _shouldYield(int totalSent) {
-    if (totalSent < _initialBurstSize) {
-      return false;
-    }
-    return (totalSent - _initialBurstSize) % _yieldInterval < _decryptBlockSize;
   }
 
 }
