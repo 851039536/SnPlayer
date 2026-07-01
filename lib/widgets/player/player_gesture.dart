@@ -39,18 +39,22 @@ class _PlayerGestureState extends State<PlayerGesture> {
   Timer? _skipTimer;
 
   // 水平拖动 seek
-  double? _dragStartPosition;
   Duration? _dragStartTime;
 
   // 垂直拖动 seek（细粒度）
-  double? _verticalDragStartOffset;
   Duration? _verticalDragStartTime;
   double _accumulatedDrag = 0;
   static const double _seekPixelsPerSecond = 8.0; // 每像素对应多少毫秒的 seek
 
+  // 拖动 seek 预览（松手才真正 seek，避免加密视频频繁 seek 卡死）
+  bool _isDragSeeking = false;
+  Duration? _dragTargetPosition;
+  Timer? _playAfterSeekTimer;
+
   @override
   void dispose() {
     _skipTimer?.cancel();
+    _playAfterSeekTimer?.cancel();
     super.dispose();
   }
 
@@ -77,7 +81,7 @@ class _PlayerGestureState extends State<PlayerGesture> {
     final isRightHalf = details.globalPosition.dx > screenWidth / 2;
 
     final currentPos = widget.controller.value.position;
-    final seekAmount = const Duration(seconds: 10);
+    const seekAmount = Duration(seconds: 10);
     final newPos = isRightHalf
         ? currentPos + seekAmount
         : currentPos - seekAmount;
@@ -98,8 +102,12 @@ class _PlayerGestureState extends State<PlayerGesture> {
   }
 
   /// seek 后确保恢复播放（流式代理下 ExoPlayer seek 后可能进入 buffering 暂停）
+  ///
+  /// 使用 Timer 字段管理，每次调用取消上一次的延迟回调，避免频繁操作时
+  /// 延迟回调堆积反复调用 play()。
   void _ensurePlayAfterSeek() {
-    Future.delayed(const Duration(milliseconds: 300), () {
+    _playAfterSeekTimer?.cancel();
+    _playAfterSeekTimer = Timer(const Duration(milliseconds: 300), () {
       if (mounted && !widget.controller.value.isPlaying) {
         widget.controller.play();
       }
@@ -122,9 +130,11 @@ class _PlayerGestureState extends State<PlayerGesture> {
   }
 
   void _onHorizontalDragStart(DragStartDetails details) {
-    _dragStartPosition = widget.controller.value.position.inMilliseconds.toDouble();
     _dragStartTime = widget.controller.value.position;
     _accumulatedDrag = 0;
+    _isDragSeeking = true;
+    _dragTargetPosition = _dragStartTime;
+    setState(() {});
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
@@ -135,17 +145,29 @@ class _PlayerGestureState extends State<PlayerGesture> {
       0,
       widget.controller.value.duration.inMilliseconds,
     );
-    widget.controller.seekTo(Duration(milliseconds: newMs));
+    // 仅更新预览，不 seek（避免加密视频频繁 seek 卡死）
+    setState(() {
+      _dragTargetPosition = Duration(milliseconds: newMs);
+    });
   }
 
   void _onHorizontalDragEnd(DragEndDetails details) {
+    if (_dragTargetPosition != null) {
+      widget.controller.seekTo(_dragTargetPosition!);
+    }
+    setState(() {
+      _isDragSeeking = false;
+      _dragTargetPosition = null;
+    });
     _ensurePlayAfterSeek();
   }
 
   void _onVerticalDragStart(DragStartDetails details) {
     _verticalDragStartTime = widget.controller.value.position;
-    _verticalDragStartOffset = details.globalPosition.dy;
     _accumulatedDrag = 0;
+    _isDragSeeking = true;
+    _dragTargetPosition = _verticalDragStartTime;
+    setState(() {});
   }
 
   void _onVerticalDragUpdate(DragUpdateDetails details) {
@@ -157,10 +179,20 @@ class _PlayerGestureState extends State<PlayerGesture> {
       0,
       widget.controller.value.duration.inMilliseconds,
     );
-    widget.controller.seekTo(Duration(milliseconds: newMs));
+    // 仅更新预览，不 seek
+    setState(() {
+      _dragTargetPosition = Duration(milliseconds: newMs);
+    });
   }
 
   void _onVerticalDragEnd(DragEndDetails details) {
+    if (_dragTargetPosition != null) {
+      widget.controller.seekTo(_dragTargetPosition!);
+    }
+    setState(() {
+      _isDragSeeking = false;
+      _dragTargetPosition = null;
+    });
     _ensurePlayAfterSeek();
   }
 
@@ -221,7 +253,40 @@ class _PlayerGestureState extends State<PlayerGesture> {
               ),
             ),
           ),
+
+        // 拖动 seek 预览浮层（松手才真正 seek）
+        if (_isDragSeeking && _dragTargetPosition != null)
+          Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 10,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.75),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                _formatDuration(_dragTargetPosition!),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
       ],
     );
+  }
+
+  String _formatDuration(Duration d) {
+    final hours = d.inHours;
+    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (hours > 0) {
+      return '$hours:${minutes.padLeft(2, '0')}:$seconds';
+    }
+    return '$minutes:$seconds';
   }
 }

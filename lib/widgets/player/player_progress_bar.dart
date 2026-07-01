@@ -51,16 +51,7 @@ class PlayerProgressBar extends StatelessWidget {
                       progress: progress,
                       bufferedRanges: value.buffered,
                       duration: duration,
-                      onChanged: (v) => controller.seekTo(v),
-                      onSeek: (v) {
-                        controller.seekTo(v);
-                        // seek 后确保恢复播放（流式代理需要短暂等待数据就绪）
-                        Future.delayed(const Duration(milliseconds: 300), () {
-                          if (!controller.value.isPlaying) {
-                            controller.play();
-                          }
-                        });
-                      },
+                      onSeek: controller.seekTo,
                     ),
                   ),
                 ),
@@ -114,14 +105,12 @@ class _BufferedSlider extends StatefulWidget {
   final double progress;
   final List<DurationRange> bufferedRanges;
   final Duration duration;
-  final ValueChanged<Duration> onChanged;
   final ValueChanged<Duration> onSeek;
 
   const _BufferedSlider({
     required this.progress,
     required this.bufferedRanges,
     required this.duration,
-    required this.onChanged,
     required this.onSeek,
   });
 
@@ -233,41 +222,33 @@ class _BufferedSliderState extends State<_BufferedSlider> {
     final localPos = details.localPosition;
     final fraction = (localPos.dx / box.size.width).clamp(0.0, 1.0);
     final seekMs = (fraction * widget.duration.inMilliseconds).round();
+    // 单击：立即 seek（单次操作成本可控）
     widget.onSeek(Duration(milliseconds: seekMs));
-    _isDragging = true;
-    _dragValue = fraction;
-    setState(() {});
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) {
-        setState(() => _isDragging = false);
-      }
-    });
   }
 
   void _onDragStart(DragStartDetails details) {
     final box = context.findRenderObject() as RenderBox;
     final localPos = box.globalToLocal(details.globalPosition);
     final fraction = (localPos.dx / box.size.width).clamp(0.0, 1.0);
+    // 仅记录拖动起始状态，不 seek
     setState(() {
       _isDragging = true;
       _dragValue = fraction;
     });
-    final seekMs = (fraction * widget.duration.inMilliseconds).round();
-    widget.onChanged(Duration(milliseconds: seekMs));
   }
 
   void _onDragUpdate(DragUpdateDetails details) {
     final box = context.findRenderObject() as RenderBox;
     final localPos = box.globalToLocal(details.globalPosition);
     final fraction = (localPos.dx / box.size.width).clamp(0.0, 1.0);
+    // 仅更新 UI 预览，不 seek（避免加密视频频繁 seek 导致解码器卡死）
     setState(() => _dragValue = fraction);
-    final seekMs = (fraction * widget.duration.inMilliseconds).round();
-    widget.onChanged(Duration(milliseconds: seekMs));
   }
 
   void _onDragEnd(DragEndDetails details) {
-    setState(() => _isDragging = false);
+    // 松手时才执行一次 seek
     final seekMs = (_dragValue * widget.duration.inMilliseconds).round();
+    setState(() => _isDragging = false);
     widget.onSeek(Duration(milliseconds: seekMs));
   }
 }

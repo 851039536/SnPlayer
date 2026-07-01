@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
@@ -24,11 +26,20 @@ class PlayerControls extends StatefulWidget {
 
 class _PlayerControlsState extends State<PlayerControls> {
   double _currentSpeed = 1.0;
+  Timer? _playAfterSeekTimer;
+  Timer? _playRetryTimer;
 
   @override
   void initState() {
     super.initState();
     _currentSpeed = widget.controller.value.playbackSpeed;
+  }
+
+  @override
+  void dispose() {
+    _playAfterSeekTimer?.cancel();
+    _playRetryTimer?.cancel();
+    super.dispose();
   }
 
   void _setSpeed(double speed) {
@@ -73,9 +84,11 @@ class _PlayerControlsState extends State<PlayerControls> {
   /// seek 后确保恢复播放
   ///
   /// 流式代理 seek 时 ExoPlayer 进入 buffering 状态，直接调用 play() 可能被忽略。
-  /// 延迟 300ms 后检查并恢复播放。
+  /// 延迟 300ms 后检查并恢复播放。使用 Timer 字段管理，每次调用取消上一次的
+  /// 延迟回调，避免频繁操作时回调堆积反复调用 play()。
   void _ensurePlayAfterSeek() {
-    Future.delayed(const Duration(milliseconds: 300), () {
+    _playAfterSeekTimer?.cancel();
+    _playAfterSeekTimer = Timer(const Duration(milliseconds: 300), () {
       if (mounted && !widget.controller.value.isPlaying) {
         widget.controller.play();
       }
@@ -178,7 +191,8 @@ class _PlayerControlsState extends State<PlayerControls> {
                 } else {
                   widget.controller.play();
                   // 流式代理下 play() 可能因 buffering 被忽略，延迟重试
-                  Future.delayed(const Duration(milliseconds: 500), () {
+                  _playRetryTimer?.cancel();
+                  _playRetryTimer = Timer(const Duration(milliseconds: 500), () {
                     if (mounted && !widget.controller.value.isPlaying) {
                       widget.controller.play();
                     }
