@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../config/crypto.dart';
 import '../utils/crypto_utils.dart';
@@ -18,15 +19,17 @@ import 'crypto_service.dart';
 /// 3. 播放器发送 Range 请求 → 代理计算密文偏移 + 调整 IV
 /// 4. 仅解密请求区间的数据，256KB 块流式返回
 /// 5. 同时写入磁盘缓存文件，二次播放直接从缓存加载
+///
+/// 并发安全：每个请求独立打开加密文件句柄，磁盘缓存写入用互斥锁保护。
 class StreamingDecryptProxy {
   HttpServer? _server;
-  RandomAccessFile? _encFile;
-  RandomAccessFile? _cacheFile;
 
   late EncryptedFileInfo _fileInfo;
   late Uint8List _iv;
   late Uint8List _key;
   late int _decryptedSize;
+  late String _encPath;
+  late String _contentType;
 
   int? _port;
   bool _stopped = false;
@@ -34,21 +37,27 @@ class StreamingDecryptProxy {
   /// 内存块缓存（LRU），key 为块索引
   final _BlockCache _blockCache = _BlockCache();
 
+  /// 磁盘缓存写入互斥锁（多个并发请求串行写入，避免 setPosition 竞态）
+  final _cacheMutex = _Mutex();
+  RandomAccessFile? _cacheFile;
+
   /// 启动代理服务器，返回分配的端口号。
   ///
   /// [encPath] 加密文件路径
   /// [cacheFilePath] 磁盘缓存文件路径（预分配，流式写入解密数据）
   Future<int> start(String encPath, String cacheFilePath) async {
+    _encPath = encPath;
+
     // 1. 读取加密文件元信息
     _fileInfo = await CryptoService.getEncryptedFileInfo(encPath);
     _iv = _fileInfo.iv;
     _key = _fileInfo.key;
     _decryptedSize = _fileInfo.decryptedSize;
 
-    // 2. 打开加密文件句柄
-    _encFile = await File(encPath).open(mode: FileMode.read);
+    // 2. 推断 Content-Type（根据原始文件名扩展名）
+    _contentType = _guessContentType(encPath);
 
-    // 3. 预分配并打开磁盘缓存文件
+    // 3. 预分配并打开磁盘缓存文件（写入用，互斥锁保护）
     final cacheParent = File(cacheFilePath).parent;
     await cacheParent.create(recursive: true);
     _cacheFile = await File(cacheFilePath).open(mode: FileMode.write);
@@ -65,12 +74,40 @@ class StreamingDecryptProxy {
 
     debugPrint('[SnPlayer] StreamingDecryptProxy: 启动于 '
         'http://127.0.0.1:$_port, 解密大小=${_decryptedSize}B '
-        '(${(_decryptedSize / 1024 / 1024).toStringAsFixed(1)}MB)');
+        '(${(_decryptedSize / 1024 / 1024).toStringAsFixed(1)}MB), '
+        'Content-Type=$_contentType');
 
     // 5. 开始监听请求
     _serveRequests();
 
     return _port!;
+  }
+
+  /// 根据加密文件名推断 MIME 类型
+  ///
+  /// 加密文件名格式：原始名称_yyyyMMdd.enc
+  /// 从原始名称的扩展名推断视频格式。
+  String _guessContentType(String encPath) {
+    // 去掉 .enc 后缀，再取原始扩展名
+    final baseName = p.basenameWithoutExtension(encPath);
+    // 去掉日期后缀 _yyyyMMdd
+    final originalName = baseName.replaceFirst(RegExp(r'_\d{8}$'), '');
+    final ext = p.extension(originalName).toLowerCase();
+
+    const mimeMap = {
+      '.mp4': 'video/mp4',
+      '.m4v': 'video/x-m4v',
+      '.mkv': 'video/x-matroska',
+      '.avi': 'video/x-msvideo',
+      '.mov': 'video/quicktime',
+      '.flv': 'video/x-flv',
+      '.wmv': 'video/x-ms-wmv',
+      '.webm': 'video/webm',
+      '.3gp': 'video/3gpp',
+      '.ts': 'video/mp2t',
+    };
+
+    return mimeMap[ext] ?? 'application/octet-stream';
   }
 
   /// 获取代理 URL（供 VideoPlayerController.networkUrl 使用）
@@ -89,11 +126,6 @@ class StreamingDecryptProxy {
     _server = null;
 
     try {
-      await _encFile?.close();
-    } catch (_) {}
-    _encFile = null;
-
-    try {
       await _cacheFile?.flush();
       await _cacheFile?.close();
     } catch (_) {}
@@ -110,7 +142,6 @@ class StreamingDecryptProxy {
 
   void _serveRequests() {
     _server!.listen((request) {
-      // 异步处理每个请求，不阻塞监听循环
       _handleRequest(request).catchError((e) {
         debugPrint('[SnPlayer] StreamingDecryptProxy: 请求处理异常: $e');
         try {
@@ -195,20 +226,14 @@ class StreamingDecryptProxy {
 
   /// 写入公共响应头
   void _writeCommonHeaders(HttpResponse response) {
-    response.headers.set(HttpHeaders.contentTypeHeader, 'video/mp4');
+    response.headers.set(HttpHeaders.contentTypeHeader, _contentType);
     response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
     response.headers.set(HttpHeaders.connectionHeader, 'keep-alive');
     response.headers.set('X-SnPlayer', 'streaming-decrypt-proxy');
   }
 
   /// 解析 HTTP Range 头
-  ///
-  /// 支持格式：
-  /// - `bytes=0-` (从开头到末尾)
-  /// - `bytes=0-1023` (指定范围)
-  /// - `bytes=1024-` (从 1024 到末尾)
   _Range? _parseRange(String rangeHeader, int totalSize) {
-    // 格式: bytes=start-end
     final parts = rangeHeader.split('=');
     if (parts.length != 2 || parts[0].trim() != 'bytes') {
       return null;
@@ -227,7 +252,6 @@ class StreamingDecryptProxy {
     int end;
 
     if (startStr.isEmpty) {
-      // bytes=-500 → 最后 500 字节
       final suffixLen = int.tryParse(endStr);
       if (suffixLen == null) {
         return null;
@@ -258,11 +282,16 @@ class StreamingDecryptProxy {
     return _Range(start, end);
   }
 
+  /// 解密处理块大小（1MB）
+  ///
+  /// 大于 [streamingChunkSize]（256KB），减少循环次数和事件循环让出频率，
+  /// 提升供数吞吐量，避免播放器缓冲区饥饿导致卡顿。
+  static const int _decryptBlockSize = 1024 * 1024;
+
   /// 解密并流式输出指定范围的数据
   ///
-  /// [response] HTTP 响应对象
-  /// [rangeStart] 请求范围起始字节（解密后数据中的偏移）
-  /// [contentLength] 要输出的字节数
+  /// 每个请求独立打开加密文件句柄，消除并发 setPosition 竞态。
+  /// 磁盘缓存写入采用 fire-and-forget（不阻塞响应流），保证供数连续性。
   Future<void> _decryptAndStream(
     HttpResponse response,
     int rangeStart,
@@ -271,109 +300,132 @@ class StreamingDecryptProxy {
     int remaining = contentLength;
     int currentPos = rangeStart;
 
-    // 使用 256KB 处理块
-    final buf = Uint8List(streamingChunkSize);
-    final procBuf = Uint8List(streamingChunkSize);
+    final buf = Uint8List(_decryptBlockSize);
+    final procBuf = Uint8List(_decryptBlockSize);
 
-    while (remaining > 0 && !_stopped) {
-      final chunkLen = remaining < streamingChunkSize ? remaining : streamingChunkSize;
+    // 每个请求独立打开文件句柄，避免并发竞态
+    final encFile = await File(_encPath).open(mode: FileMode.read);
 
-      // 先检查内存块缓存
-      final blockIndex = currentPos ~/ streamingBlockSize;
-      final blockOffset = currentPos % streamingBlockSize;
-      final cachedBlock = _blockCache.get(blockIndex);
+    try {
+      while (remaining > 0 && !_stopped) {
+        final chunkLen =
+            remaining < _decryptBlockSize ? remaining : _decryptBlockSize;
 
-      if (cachedBlock != null) {
-        // 缓存命中：从块中复制数据
-        final copyLen = chunkLen;
-        final srcStart = blockOffset;
-        final srcEnd = srcStart + copyLen;
-        final actualEnd = srcEnd > cachedBlock.length ? cachedBlock.length : srcEnd;
-        final actualCopyLen = actualEnd - srcStart;
+        // 先检查内存块缓存
+        final blockIndex = currentPos ~/ streamingBlockSize;
+        final blockOffset = currentPos % streamingBlockSize;
+        final cachedBlock = _blockCache.get(blockIndex);
 
-        if (actualCopyLen > 0) {
-          response.add(cachedBlock.sublist(srcStart, actualEnd));
-          remaining -= actualCopyLen;
-          currentPos += actualCopyLen;
-        }
+        if (cachedBlock != null) {
+          final copyLen = chunkLen;
+          final srcStart = blockOffset;
+          final srcEnd = srcStart + copyLen;
+          final actualEnd =
+              srcEnd > cachedBlock.length ? cachedBlock.length : srcEnd;
+          final actualCopyLen = actualEnd - srcStart;
 
-        // 如果块内数据不足，继续从下一块读取
-        if (actualCopyLen < copyLen) {
+          if (actualCopyLen > 0) {
+            response.add(cachedBlock.sublist(srcStart, actualEnd));
+            remaining -= actualCopyLen;
+            currentPos += actualCopyLen;
+          }
+
+          if (actualCopyLen < copyLen) {
+            continue;
+          }
+
+          // 缓存命中时每 4MB 让出一次
+          if (remaining > 0 && (contentLength - remaining) % (4 * 1024 * 1024) < _decryptBlockSize) {
+            await Future.delayed(Duration.zero);
+          }
           continue;
         }
 
-        // 让出事件循环
-        if (remaining > 0) {
+        // 缓存未命中：解密数据
+        // 向下对齐到 16 字节边界
+        final alignedStart = (currentPos ~/ aesBlockSize) * aesBlockSize;
+        final skipBytes = currentPos - alignedStart;
+        final counterOffset = alignedStart ~/ aesBlockSize;
+
+        final totalDecryptLen = skipBytes + chunkLen;
+
+        final adjustedIv = CryptoUtils.incrementCounter(_iv, counterOffset);
+        final cipher = CryptoUtils.createCtrCipher(_key, adjustedIv);
+
+        // 从加密文件读取对应区间（独立句柄，无竞态）
+        final cipherFileOffset = headerSize + alignedStart;
+        await encFile.setPosition(cipherFileOffset);
+
+        final readLen = totalDecryptLen < _decryptBlockSize
+            ? totalDecryptLen
+            : _decryptBlockSize;
+        final bytesRead = await encFile.readInto(buf, 0, readLen);
+
+        if (bytesRead <= 0) {
+          break;
+        }
+
+        // 解密
+        cipher.processBytes(buf, 0, bytesRead, procBuf, 0);
+
+        // 写入 HTTP 响应（跳过 skipBytes）— 先写响应，保证供数连续
+        final outputStart = skipBytes;
+        final outputEnd = bytesRead;
+        final outputLen = outputEnd - outputStart;
+
+        if (outputLen > 0) {
+          response.add(procBuf.sublist(outputStart, outputEnd));
+        }
+
+        // 磁盘缓存写入 — fire-and-forget，不阻塞响应流
+        // 复制数据后异步写入，避免 procBuf 被下一轮覆盖
+        if (outputLen > 0) {
+          final cacheData = Uint8List.fromList(procBuf.sublist(0, bytesRead));
+          final cacheOffset = alignedStart;
+          unawaited(_writeToCache(cacheOffset, cacheData, bytesRead));
+        }
+
+        // 更新内存块缓存
+        final currentBlockIndex = alignedStart ~/ streamingBlockSize;
+        final blockStartAligned = currentBlockIndex * streamingBlockSize;
+        if (alignedStart == blockStartAligned &&
+            bytesRead >= streamingBlockSize) {
+          _blockCache.put(
+            currentBlockIndex,
+            Uint8List.fromList(procBuf.sublist(0, streamingBlockSize)),
+          );
+        }
+
+        remaining -= outputLen;
+        currentPos += outputLen;
+
+        // 每 4MB 让出一次事件循环，平衡吞吐量和 UI 响应
+        if (remaining > 0 && (contentLength - remaining) % (4 * 1024 * 1024) < _decryptBlockSize) {
           await Future.delayed(Duration.zero);
         }
-        continue;
       }
-
-      // 缓存未命中：解密数据
-      // 向下对齐到 16 字节边界
-      final alignedStart = (currentPos ~/ aesBlockSize) * aesBlockSize;
-      final skipBytes = currentPos - alignedStart;
-      final counterOffset = alignedStart ~/ aesBlockSize;
-
-      // 计算需要解密的总长度（含 skip 部分）
-      final totalDecryptLen = skipBytes + chunkLen;
-
-      // 创建调整后的 IV
-      final adjustedIv = CryptoUtils.incrementCounter(_iv, counterOffset);
-      final cipher = CryptoUtils.createCtrCipher(_key, adjustedIv);
-
-      // 从加密文件读取对应区间
-      final cipherFileOffset = headerSize + alignedStart;
-      await _encFile!.setPosition(cipherFileOffset);
-
-      final readLen = totalDecryptLen < streamingChunkSize
-          ? totalDecryptLen
-          : streamingChunkSize;
-      final bytesRead = await _encFile!.readInto(buf, 0, readLen);
-
-      if (bytesRead <= 0) {
-        break;
-      }
-
-      // 解密
-      cipher.processBytes(buf, 0, bytesRead, procBuf, 0);
-
-      // 写入 HTTP 响应（跳过 skipBytes）
-      final outputStart = skipBytes;
-      final outputEnd = bytesRead;
-      final outputLen = outputEnd - outputStart;
-
-      if (outputLen > 0) {
-        response.add(procBuf.sublist(outputStart, outputEnd));
-      }
-
-      // 写入磁盘缓存（按对齐偏移写入）
-      if (_cacheFile != null) {
-        try {
-          await _cacheFile!.setPosition(alignedStart);
-          await _cacheFile!.writeFrom(procBuf, 0, bytesRead);
-        } catch (e) {
-          debugPrint('[SnPlayer] StreamingDecryptProxy: 磁盘缓存写入失败: $e');
-        }
-      }
-
-      // 更新内存块缓存（以 4MB 块为粒度）
-      final currentBlockIndex = alignedStart ~/ streamingBlockSize;
-      final blockStartAligned = currentBlockIndex * streamingBlockSize;
-      // 如果本次解密的数据恰好覆盖了某个块的部分，缓存它
-      // 简化：仅当数据从块边界开始时缓存整块
-      if (alignedStart == blockStartAligned && bytesRead >= streamingBlockSize) {
-        _blockCache.put(currentBlockIndex, Uint8List.fromList(procBuf.sublist(0, streamingBlockSize)));
-      }
-
-      remaining -= outputLen;
-      currentPos += outputLen;
-
-      // 让出事件循环，防止 UI 帧丢失
-      if (remaining > 0) {
-        await Future.delayed(Duration.zero);
-      }
+    } finally {
+      await encFile.close();
     }
+  }
+
+  /// 互斥写入磁盘缓存
+  Future<void> _writeToCache(int offset, Uint8List data, int length) async {
+    if (_cacheFile == null) {
+      return;
+    }
+
+    await _cacheMutex.synchronized(() async {
+      if (_cacheFile == null || _stopped) {
+        return;
+      }
+      try {
+        await _cacheFile!.setPosition(offset);
+        await _cacheFile!.writeFrom(data, 0, length);
+      } catch (e) {
+        debugPrint('[SnPlayer] StreamingDecryptProxy: 磁盘缓存写入失败: $e');
+      }
+    });
   }
 }
 
@@ -401,6 +453,27 @@ class _BlockCache {
 
   void clear() {
     _cache.clear();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 简易互斥锁（基于 Completer 队列）
+// ═══════════════════════════════════════════════════════════
+
+class _Mutex {
+  Completer<void>? _completer;
+
+  Future<T> synchronized<T>(Future<T> Function() fn) async {
+    while (_completer != null) {
+      await _completer!.future;
+    }
+    _completer = Completer<void>();
+    try {
+      return await fn();
+    } finally {
+      _completer!.complete();
+      _completer = null;
+    }
   }
 }
 

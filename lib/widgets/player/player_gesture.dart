@@ -90,8 +90,20 @@ class _PlayerGestureState extends State<PlayerGesture> {
     );
     widget.controller.seekTo(clamped);
 
+    // 流式代理下 seek 后可能进入 buffering 状态暂停，延迟恢复播放
+    _ensurePlayAfterSeek();
+
     // 显示跳过提示
     _showSkipFeedback(isRightHalf);
+  }
+
+  /// seek 后确保恢复播放（流式代理下 ExoPlayer seek 后可能进入 buffering 暂停）
+  void _ensurePlayAfterSeek() {
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted && !widget.controller.value.isPlaying) {
+        widget.controller.play();
+      }
+    });
   }
 
   void _showSkipFeedback(bool isForward) {
@@ -126,6 +138,10 @@ class _PlayerGestureState extends State<PlayerGesture> {
     widget.controller.seekTo(Duration(milliseconds: newMs));
   }
 
+  void _onHorizontalDragEnd(DragEndDetails details) {
+    _ensurePlayAfterSeek();
+  }
+
   void _onVerticalDragStart(DragStartDetails details) {
     _verticalDragStartTime = widget.controller.value.position;
     _verticalDragStartOffset = details.globalPosition.dy;
@@ -144,6 +160,10 @@ class _PlayerGestureState extends State<PlayerGesture> {
     widget.controller.seekTo(Duration(milliseconds: newMs));
   }
 
+  void _onVerticalDragEnd(DragEndDetails details) {
+    _ensurePlayAfterSeek();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -155,8 +175,10 @@ class _PlayerGestureState extends State<PlayerGesture> {
           onTapUp: _handleTapUp,
           onHorizontalDragStart: _onHorizontalDragStart,
           onHorizontalDragUpdate: _onHorizontalDragUpdate,
+          onHorizontalDragEnd: _onHorizontalDragEnd,
           onVerticalDragStart: _onVerticalDragStart,
           onVerticalDragUpdate: _onVerticalDragUpdate,
+          onVerticalDragEnd: _onVerticalDragEnd,
           child: widget.child,
         ),
 

@@ -47,12 +47,20 @@ class PlayerProgressBar extends StatelessWidget {
                 SizedBox(
                   height: 40,
                   child: Center(
-                    child: _BufferedSlider(
+                    child:                     _BufferedSlider(
                       progress: progress,
                       bufferedRanges: value.buffered,
                       duration: duration,
                       onChanged: (v) => controller.seekTo(v),
-                      onSeek: (v) => controller.seekTo(v),
+                      onSeek: (v) {
+                        controller.seekTo(v);
+                        // seek 后确保恢复播放（流式代理需要短暂等待数据就绪）
+                        Future.delayed(const Duration(milliseconds: 300), () {
+                          if (!controller.value.isPlaying) {
+                            controller.play();
+                          }
+                        });
+                      },
                     ),
                   ),
                 ),

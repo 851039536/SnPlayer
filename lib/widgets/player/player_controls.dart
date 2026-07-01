@@ -54,6 +54,7 @@ class _PlayerControlsState extends State<PlayerControls> {
       ),
     );
     widget.controller.seekTo(clamped);
+    _ensurePlayAfterSeek();
   }
 
   void _skipForward() {
@@ -66,6 +67,19 @@ class _PlayerControlsState extends State<PlayerControls> {
       ),
     );
     widget.controller.seekTo(clamped);
+    _ensurePlayAfterSeek();
+  }
+
+  /// seek 后确保恢复播放
+  ///
+  /// 流式代理 seek 时 ExoPlayer 进入 buffering 状态，直接调用 play() 可能被忽略。
+  /// 延迟 300ms 后检查并恢复播放。
+  void _ensurePlayAfterSeek() {
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted && !widget.controller.value.isPlaying) {
+        widget.controller.play();
+      }
+    });
   }
 
   String _speedLabel() {
@@ -163,6 +177,12 @@ class _PlayerControlsState extends State<PlayerControls> {
                   widget.controller.pause();
                 } else {
                   widget.controller.play();
+                  // 流式代理下 play() 可能因 buffering 被忽略，延迟重试
+                  Future.delayed(const Duration(milliseconds: 500), () {
+                    if (mounted && !widget.controller.value.isPlaying) {
+                      widget.controller.play();
+                    }
+                  });
                 }
                 setState(() {});
               },
