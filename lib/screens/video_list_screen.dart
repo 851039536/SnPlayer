@@ -435,6 +435,13 @@ class _VideoListScreenState extends State<VideoListScreen> {
           label: '移动到文件夹',
           onTap: () => _moveVideo(video, videoProvider),
         ),
+        // 详细信息
+        ActionSheetItem(
+          icon: Icons.info_outline_rounded,
+          label: '详细信息',
+          color: const Color(0xFF6366F1),
+          onTap: () => _showVideoDetail(video),
+        ),
         // 打开存储路径
         ActionSheetItem(
           icon: Icons.folder_open_rounded,
@@ -634,6 +641,184 @@ class _VideoListScreenState extends State<VideoListScreen> {
     } catch (e) {
       debugPrint('[SnPlayer] _openStoragePath: $e');
     }
+  }
+
+  /// 显示视频文件详细信息底部弹窗
+  void _showVideoDetail(VideoItem video) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final file = File(video.encPath);
+    final fileName = file.uri.pathSegments.last;
+    final ext = fileName.contains('.') ? fileName.split('.').last.toUpperCase() : '未知';
+    final parentPath = file.parent.path;
+    final folderLabel = video.folderName ?? '根目录';
+
+    // 格式化日期
+    final dt = video.encryptedAt;
+    final dateStr =
+        '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:'
+        '${dt.second.toString().padLeft(2, '0')}';
+
+    final maxHeight = MediaQuery.of(context).size.height * 0.8;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: colorScheme.surfaceContainerHigh,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xxl)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxHeight),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 拖拽指示条
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(
+                        top: AppSpacing.sm, bottom: AppSpacing.sm),
+                      width: 32,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+
+                  // 标题区
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.xxl, vertical: AppSpacing.sm),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF6366F1).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(AppRadius.md + 4),
+                          ),
+                          child: const Icon(
+                            Icons.info_outline_rounded,
+                            color: Color(0xFF6366F1),
+                            size: 22,
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.lg),
+                        Expanded(
+                          child: Text(
+                            video.displayName,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+
+                  // 详细信息行
+                  _buildDetailRow(
+                    ctx, Icons.insert_drive_file_outlined, '文件名', fileName,
+                  ),
+                  _buildDetailRow(
+                    ctx, Icons.category_outlined, '文件类型', ext,
+                  ),
+                  _buildDetailRow(
+                    ctx, Icons.storage_rounded, '文件大小', video.formattedSize,
+                  ),
+                  _buildDetailRow(
+                    ctx, Icons.folder_outlined, '存储路径', parentPath,
+                  ),
+                  _buildDetailRow(
+                    ctx, Icons.folder_copy_outlined, '所属文件夹', folderLabel,
+                  ),
+                  _buildDetailRow(
+                    ctx, Icons.calendar_today_rounded, '加密日期', dateStr,
+                  ),
+                  _buildDetailRow(
+                    ctx, Icons.fingerprint, '视频 ID', video.id,
+                  ),
+
+                  // 取消按钮
+                  const SizedBox(height: AppSpacing.sm),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.lg),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: AppSpacing.md),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppRadius.lg),
+                          ),
+                        ),
+                        child: const Text('关闭'),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 详情行：左侧图标 + 标签 + 右侧值
+  Widget _buildDetailRow(
+    BuildContext ctx,
+    IconData icon,
+    String label,
+    String value,
+  ) {
+    final colorScheme = Theme.of(ctx).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.xxl,
+        vertical: AppSpacing.md,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: colorScheme.onSurfaceVariant),
+          const SizedBox(width: AppSpacing.lg),
+          SizedBox(
+            width: 72,
+            child: Text(
+              label,
+              style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Text(
+              value,
+              style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _deleteVideo(VideoItem video, VideoListProvider provider) async {
