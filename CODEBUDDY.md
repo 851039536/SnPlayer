@@ -52,7 +52,9 @@ utils/            # 纯函数工具（文件工具、加密工具、颜色工具
 
 ### 加密核心（services/crypto_service.dart）
 
-加密算法：**AES-256-CTR + PBKDF2-HMAC-SHA256（100,000 次迭代）**
+加密算法：**AES-256-CTR + PBKDF2-HMAC-SHA256（10 次迭代）**
+
+> **安全说明**：PBKDF2 迭代次数仅 10 次（非标准的 100,000+），因本项目使用固定密码而非用户密码，安全性靠密码本身强度而非 KDF 迭代。若改为用户自定义密码，应将 `pbkdf2Iterations` 提升至 100,000 以上。
 
 文件格式（64 字节明文文件头）：
 
@@ -66,7 +68,7 @@ offset 64+:    AES-256-CTR 密文
 
 关键设计：
 - `CryptoService` 使用 **Isolate** 在后台线程执行加解密，避免阻塞 UI。
-- 加密/解密均支持**多 Isolate 并行分块**，`encryptFile`/`decryptToTemp` 会根据文件大小自动选择路径：≥64MB 走并行（2-6 路），否则串行。并行路径曾存在文件头版本字节（偏移 32）被截断为 0x00 的 bug，根因是 `_writeBatchToOutput` 使用 `FileMode.write`（等同 `O_TRUNC`）重复打开输出文件，清空了已写入的 64 字节文件头。已于 2026-07-02 修复：改为在整个并行流程中复用同一 `RandomAccessFile` 句柄，由 `try/finally` 保证关闭。
+- 加密/解密均支持**多 Isolate 并行分块**，`encryptFile`/`decryptFile` 会根据文件大小自动选择路径：≥64MB 走并行（2-6 路），否则串行。并行路径曾存在文件头版本字节（偏移 32）被截断为 0x00 的 bug，根因是 `_writeBatchToOutput` 使用 `FileMode.write`（等同 `O_TRUNC`）重复打开输出文件，清空了已写入的 64 字节文件头。已于 2026-07-02 修复：改为在整个并行流程中复用同一 `RandomAccessFile` 句柄，由 `try/finally` 保证关闭。并行失败时会清理临时 chunk 文件和损坏的输出文件，进度回调单调递增避免多 chunk 交错跳变。
 - 密钥派生结果使用 LRU 缓存（容量 100），避免重复 PBKDF2 计算。
 - `crypto_isolate.dart` 是 Isolate Worker，在独立线程中执行 encrypt/decrypt 命令，采用双缓冲流水线（4MB 缓冲区）。
 - `utils/crypto_utils.dart` 是纯 Dart 的密码学工具函数，不依赖 Flutter/Isolate，可跨平台使用。

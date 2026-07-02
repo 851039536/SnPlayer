@@ -16,10 +16,10 @@ import 'crypto_isolate.dart';
 /// 兼容 MewTool .enc 文件格式（64 字节文件头：IV + Salt + 保留字段）
 /// 采用 PBKDF2-HMAC-SHA256 密钥派生 + AES-256-CTR 流式加密
 /// 4MB 双缓冲流水线，I/O 与 CPU 计算重叠
-/// 大文件（≥64MB）自动启用 2-4 路并行分块解密
+/// 大文件（≥64MB）自动启用 2-6 路并行分块加解密
 class CryptoService {
   /// 从固定密码和指定盐值派生 32 字节 AES 密钥
-  /// 密码固定，以 salt 的 base64 编码作为缓存 key，避免重复的 100K 迭代开销
+  /// 密码固定，以 salt 的 base64 编码作为缓存 key，避免重复的 10 次迭代开销
   static Uint8List deriveKey(Uint8List passwordBytes, Uint8List salt) {
     final cacheKey = base64.encode(salt);
     final cached = _keyCache[cacheKey];
@@ -47,7 +47,8 @@ class CryptoService {
   }) async {
     final fileSize = await File(inputPath).length();
     if (fileSize >= parallelDecryptMinFileSize) {
-      await encryptFileParallel(inputPath, outputPath, onProgress: onProgress);
+      await encryptFileParallel(inputPath, outputPath,
+          onProgress: onProgress, fileSize: fileSize);
     } else {
       await _runInIsolate(
         command: 'encrypt',
@@ -65,15 +66,20 @@ class CryptoService {
     String inputPath,
     String outputPath, {
     void Function(double)? onProgress,
+    int? fileSize,
   }) async {
     await _runParallelEncrypt(
       inputPath: inputPath,
       outputPath: outputPath,
       onProgress: onProgress,
+      fileSize: fileSize,
     );
   }
 
-  /// 解密文件（在后台 Isolate 中执行，不阻塞 UI）
+  /// 解密文件（自动根据文件大小选择串行/并行路径）
+  ///
+  /// - 文件 < 64MB：单 Isolate 串行解密
+  /// - 文件 >= 64MB：多 Isolate 并行分块解密，2-6 路并行提速
   ///
   /// [inputPath] 加密文件路径（.enc）
   /// [outputPath] 解密输出路径
@@ -83,12 +89,17 @@ class CryptoService {
     String outputPath, {
     void Function(double)? onProgress,
   }) async {
-    await _runInIsolate(
-      command: 'decrypt',
-      inputPath: inputPath,
-      outputPath: outputPath,
-      onProgress: onProgress,
-    );
+    final fileSize = await File(inputPath).length();
+    if (fileSize >= parallelDecryptMinFileSize) {
+      await decryptFileParallel(inputPath, outputPath, onProgress: onProgress);
+    } else {
+      await _runInIsolate(
+        command: 'decrypt',
+        inputPath: inputPath,
+        outputPath: outputPath,
+        onProgress: onProgress,
+      );
+    }
   }
 
   /// Isolate 最大运行时间（5 分钟），超时后强制终止
@@ -416,12 +427,13 @@ class CryptoService {
     outputRaf.writeByteSync(0);
     // 注意：此处不 closeSync，保持句柄打开供 _writeBatchToOutput 复用
 
-    try {
-      // 5. 分批启动 Isolate
-      final pendingFutures = <Future<void>>[];
-      final chunkTempPaths = <String>[];
-      final chunkWriteOffsets = <int>[];
+    // 5. 分批启动 Isolate（声明在 try 外，供 catch 清理使用）
+    final pendingFutures = <Future<void>>[];
+    final chunkTempPaths = <String>[];
+    final chunkWriteOffsets = <int>[];
+    double maxProgress = 0.0;
 
+    try {
       for (int i = 0; i < isolateCount; i++) {
         final startOffset = i * chunkSize;
         final length = (i == isolateCount - 1)
@@ -437,17 +449,26 @@ class CryptoService {
         chunkTempPaths.add(tempPath);
         chunkWriteOffsets.add(startOffset);
 
-        final future = _spawnChunkIsolate(
+        final future = _spawnChunkIsolateGeneric(
           inputPath: inputPath,
           outputPath: tempPath,
           startOffset: startOffset,
           chunkLength: length,
-          writeOffset: startOffset,
           keyBase64: keyBase64,
           ivBase64: ivBase64,
           chunkIndex: i,
           totalChunks: isolateCount,
-          onProgress: onProgress,
+          isEncrypt: false,
+          writeOffset: startOffset,
+          onProgress: onProgress == null
+              ? null
+              : (globalProgress) {
+                  // 单调递增：多 chunk 并发交错时只回调最大值，避免进度来回跳
+                  if (globalProgress > maxProgress) {
+                    maxProgress = globalProgress;
+                    onProgress(maxProgress);
+                  }
+                },
         );
 
         pendingFutures.add(future);
@@ -464,8 +485,6 @@ class CryptoService {
           pendingFutures.clear();
           chunkTempPaths.clear();
           chunkWriteOffsets.clear();
-          // 让出事件循环，防止 UI 线程饥饿
-          await Future.delayed(Duration.zero);
         }
       }
 
@@ -479,6 +498,14 @@ class CryptoService {
       }
 
       onProgress?.call(1.0);
+    } catch (e) {
+      // 清理残留的临时 chunk 文件
+      for (final p in chunkTempPaths) {
+        try { await File(p).delete(); } catch (_) {}
+      }
+      // 删除损坏的输出文件，避免调用方误用半成品
+      try { await File(outputPath).delete(); } catch (_) {}
+      rethrow;
     } finally {
       outputRaf.closeSync();
     }
@@ -521,6 +548,7 @@ class CryptoService {
     required String inputPath,
     required String outputPath,
     void Function(double)? onProgress,
+    int? fileSize,
   }) async {
     final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
 
@@ -539,7 +567,7 @@ class CryptoService {
     header[versionOffset] = versionByte;
 
     // 4. 获取原始文件大小，计算分块
-    final rawSize = await File(inputPath).length();
+    final rawSize = fileSize ?? await File(inputPath).length();
     final isolateCount = _getChunkCount(rawSize);
     final rawChunkSize = rawSize ~/ isolateCount;
     final chunkSize = (rawChunkSize ~/ aesBlockSize) * aesBlockSize;
@@ -560,12 +588,13 @@ class CryptoService {
     outputRaf.writeByteSync(0);
     // 注意：此处不 closeSync，保持句柄打开供 _writeBatchToOutput 复用
 
-    try {
-      // 6. 分批启动加密 Isolate
-      final pendingFutures = <Future<void>>[];
-      final chunkTempPaths = <String>[];
-      final chunkWriteOffsets = <int>[];
+    // 6. 分批启动加密 Isolate（声明在 try 外，供 catch 清理使用）
+    final pendingFutures = <Future<void>>[];
+    final chunkTempPaths = <String>[];
+    final chunkWriteOffsets = <int>[];
+    double maxProgress = 0.0;
 
+    try {
       for (int i = 0; i < isolateCount; i++) {
         final startOffset = i * chunkSize;
         final length = (i == isolateCount - 1)
@@ -581,7 +610,7 @@ class CryptoService {
         // 密文数据在输出文件中的偏移 = 文件头 + 块起始位置
         chunkWriteOffsets.add(headerSize + startOffset);
 
-        final future = _spawnEncryptChunkIsolate(
+        final future = _spawnChunkIsolateGeneric(
           inputPath: inputPath,
           outputPath: tempPath,
           startOffset: startOffset,
@@ -590,7 +619,16 @@ class CryptoService {
           ivBase64: adjustedIvBase64,
           chunkIndex: i,
           totalChunks: isolateCount,
-          onProgress: onProgress,
+          isEncrypt: true,
+          onProgress: onProgress == null
+              ? null
+              : (globalProgress) {
+                  // 单调递增：多 chunk 并发交错时只回调最大值，避免进度来回跳
+                  if (globalProgress > maxProgress) {
+                    maxProgress = globalProgress;
+                    onProgress(maxProgress);
+                  }
+                },
         );
 
         pendingFutures.add(future);
@@ -604,7 +642,6 @@ class CryptoService {
           pendingFutures.clear();
           chunkTempPaths.clear();
           chunkWriteOffsets.clear();
-          await Future.delayed(Duration.zero);
         }
       }
 
@@ -617,13 +654,24 @@ class CryptoService {
       }
 
       onProgress?.call(1.0);
+    } catch (e) {
+      // 清理残留的临时 chunk 文件
+      for (final p in chunkTempPaths) {
+        try { await File(p).delete(); } catch (_) {}
+      }
+      // 删除损坏的输出文件，避免调用方误用半成品
+      try { await File(outputPath).delete(); } catch (_) {}
+      rethrow;
     } finally {
       outputRaf.closeSync();
     }
   }
 
-  /// 启动单个加密块 Isolate
-  static Future<void> _spawnEncryptChunkIsolate({
+  /// 启动单个加/解密块 Isolate（通用）
+  ///
+  /// [isEncrypt] true=加密块（encrypt_chunk），false=解密块（decrypt_chunk）
+  /// [writeOffset] 仅解密时有意义（写入输出文件的偏移），加密时传 null
+  static Future<void> _spawnChunkIsolateGeneric({
     required String inputPath,
     required String outputPath,
     required int startOffset,
@@ -632,9 +680,13 @@ class CryptoService {
     required String ivBase64,
     required int chunkIndex,
     required int totalChunks,
+    required bool isEncrypt,
+    int? writeOffset,
     void Function(double)? onProgress,
   }) async {
     final completer = Completer<void>();
+    final command = isEncrypt ? 'encrypt_chunk' : 'decrypt_chunk';
+    final opLabel = isEncrypt ? 'Encrypt' : 'Decrypt';
 
     final receivePort = ReceivePort();
     final isolate = await Isolate.spawn(cryptoWorker, receivePort.sendPort);
@@ -655,15 +707,15 @@ class CryptoService {
           final msg = event['message'] as String? ?? 'Unknown error';
           if (!completer.isCompleted) {
             completer.completeError(Exception(
-                'Encrypt chunk $chunkIndex/$totalChunks failed: $msg'));
+                '$opLabel chunk $chunkIndex/$totalChunks failed: $msg'));
           }
         }
       }
     });
 
     try {
-      workerSendPort.send({
-        'command': 'encrypt_chunk',
+      final message = <String, dynamic>{
+        'command': command,
         'inputPath': inputPath,
         'outputPath': outputPath,
         'startOffset': startOffset,
@@ -673,11 +725,15 @@ class CryptoService {
         'chunkIndex': chunkIndex,
         'totalChunks': totalChunks,
         'progressPort': progressPort.sendPort,
-      });
+      };
+      if (!isEncrypt && writeOffset != null) {
+        message['writeOffset'] = writeOffset;
+      }
+      workerSendPort.send(message);
 
       await completer.future.timeout(_isolateTimeout, onTimeout: () {
         throw TimeoutException(
-            'Encrypt chunk $chunkIndex/$totalChunks timeout (${_isolateTimeout.inSeconds}s)');
+            '$opLabel chunk $chunkIndex/$totalChunks timeout (${_isolateTimeout.inSeconds}s)');
       });
     } finally {
       progressPort.close();
@@ -699,80 +755,6 @@ class CryptoService {
       return parallelDecryptMaxIsolates;  // 256-512MB: 4 路
     }
     return parallelDecryptMidIsolates;    // 64-256MB: 2 路
-  }
-
-  /// 启动单个块解密 Isolate
-  static Future<void> _spawnChunkIsolate({
-    required String inputPath,
-    required String outputPath,
-    required int startOffset,
-    required int chunkLength,
-    required int writeOffset,
-    required String keyBase64,
-    required String ivBase64,
-    required int chunkIndex,
-    required int totalChunks,
-    void Function(double)? onProgress,
-  }) async {
-    final completer = Completer<void>();
-
-    final receivePort = ReceivePort();
-    final isolate = await Isolate.spawn(cryptoWorker, receivePort.sendPort);
-    final workerSendPort = await receivePort.first as SendPort;
-
-    final progressPort = ReceivePort();
-    progressPort.listen((event) {
-      if (event is Map) {
-        final type = event['type'] as String?;
-        if (type == 'progress') {
-          final value = (event['value'] as num?)?.toDouble();
-          if (value != null && onProgress != null) {
-            final globalProgress =
-                (chunkIndex + value) / totalChunks;
-            onProgress(globalProgress);
-          }
-        } else if (type == 'done') {
-          if (!completer.isCompleted) {
-            completer.complete();
-          }
-        } else if (type == 'error') {
-          final message = event['message'] as String? ?? 'Unknown error';
-          if (!completer.isCompleted) {
-            completer.completeError(Exception(
-                'Chunk $chunkIndex/$totalChunks 解密失败: $message'));
-          }
-        }
-      }
-    });
-
-    try {
-      workerSendPort.send({
-        'command': 'decrypt_chunk',
-        'inputPath': inputPath,
-        'outputPath': outputPath,
-        'startOffset': startOffset,
-        'chunkLength': chunkLength,
-        'writeOffset': writeOffset,
-        'keyBase64': keyBase64,
-        'ivBase64': ivBase64,
-        'chunkIndex': chunkIndex,
-        'totalChunks': totalChunks,
-        'progressPort': progressPort.sendPort,
-      });
-
-      await completer.future.timeout(_isolateTimeout, onTimeout: () {
-        throw TimeoutException(
-            '块 $chunkIndex/$totalChunks 解密超时 (${_isolateTimeout.inSeconds}s)');
-      });
-    } finally {
-      progressPort.close();
-      receivePort.close();
-      try {
-        isolate.kill(priority: Isolate.beforeNextEvent);
-      } catch (e) {
-        isolate.kill(priority: Isolate.immediate);
-      }
-    }
   }
 
   /// 创建 AES-256-CTR cipher 并初始化
@@ -801,7 +783,7 @@ class CryptoService {
   // --- 密钥缓存 ---
 
   /// PBKDF2 派生密钥缓存，以 salt 的 base64 编码为 key
-  /// 密码固定，相同 salt 的密钥可复用，避免重复的 100K 迭代开销
+  /// 密码固定，相同 salt 的密钥可复用，避免重复的 10 次迭代开销
   /// LRU 上限 100 条（32B × 100 = 3.2KB，可忽略不计）
   static final Map<String, Uint8List> _keyCache = {};
   static const int _maxKeyCacheSize = 100;

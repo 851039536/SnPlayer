@@ -44,20 +44,20 @@ void cryptoWorker(SendPort sendPort) {
         final maxBytes = message['maxBytes'] as int? ?? partialDecryptMaxBytes;
         await _decryptFilePartialInIsolate(inputPath, outputPath, password, progressPort, maxBytes);
       } else if (command == 'decrypt_chunk') {
-        await _decryptChunkInIsolate(
+        await _processChunkInIsolate(
           inputPath: inputPath,
           outputPath: outputPath,
           startOffset: (message['startOffset'] as int?) ?? 0,
           chunkLength: (message['chunkLength'] as int?) ?? 0,
-          writeOffset: (message['writeOffset'] as int?) ?? 0,
           keyBase64: message['keyBase64'] as String? ?? '',
           ivBase64: message['ivBase64'] as String? ?? '',
           chunkIndex: (message['chunkIndex'] as int?) ?? 0,
           totalChunks: (message['totalChunks'] as int?) ?? 1,
+          isDecrypt: true,
           progressPort: progressPort,
         );
       } else if (command == 'encrypt_chunk') {
-        await _encryptChunkInIsolate(
+        await _processChunkInIsolate(
           inputPath: inputPath,
           outputPath: outputPath,
           startOffset: (message['startOffset'] as int?) ?? 0,
@@ -66,6 +66,7 @@ void cryptoWorker(SendPort sendPort) {
           ivBase64: message['ivBase64'] as String? ?? '',
           chunkIndex: (message['chunkIndex'] as int?) ?? 0,
           totalChunks: (message['totalChunks'] as int?) ?? 1,
+          isDecrypt: false,
           progressPort: progressPort,
         );
       } else {
@@ -272,11 +273,14 @@ Future<void> _processFile(
   }
 }
 
-/// 并行加密块 Worker：加密原始视频的一个指定区间，写入临时块文件
+/// 并行加/解密块 Worker（通用）：处理原始/加密视频的一个指定区间，写入临时块文件
+///
+/// [isDecrypt] true=解密块（从加密文件读取，跳过 headerSize），
+///              false=加密块（从原始文件读取）
 ///
 /// 读取 [inputPath] 的 [startOffset] 起 [chunkLength] 字节，
-/// 使用已调整的 AES-CTR cipher 加密后写入临时文件。
-Future<void> _encryptChunkInIsolate({
+/// 使用已调整的 AES-CTR cipher 加/解密后写入临时文件。
+Future<void> _processChunkInIsolate({
   required String inputPath,
   required String outputPath,
   required int startOffset,
@@ -285,6 +289,7 @@ Future<void> _encryptChunkInIsolate({
   required String ivBase64,
   required int chunkIndex,
   required int totalChunks,
+  required bool isDecrypt,
   SendPort? progressPort,
 }) async {
   final key = base64.decode(keyBase64);
@@ -292,101 +297,8 @@ Future<void> _encryptChunkInIsolate({
 
   final cipher = CryptoUtils.createCtrCipher(Uint8List.fromList(key), Uint8List.fromList(iv));
 
-  final inputFile = File(inputPath);
-  final raf = inputFile.openSync(mode: FileMode.read);
-
-  // 写入临时块文件
-  final output = File(outputPath).openWrite(mode: FileMode.writeOnly);
-
-  try {
-    raf.setPositionSync(startOffset);
-
-    final bufA = Uint8List(bufferSize);
-    final bufB = Uint8List(bufferSize);
-    final procBuf = Uint8List(bufferSize);
-
-    bool useA = true;
-    int totalEncrypted = 0;
-
-    final firstReadSize =
-        (chunkLength < bufferSize) ? chunkLength : bufferSize;
-    int bytesRead = raf.readIntoSync(bufA, 0, firstReadSize);
-
-    while (bytesRead > 0) {
-      final readBuf = useA ? bufA : bufB;
-      final nextBuf = useA ? bufB : bufA;
-
-      int processLen = bytesRead;
-      final chunkRemaining = chunkLength - totalEncrypted;
-      if (processLen > chunkRemaining) {
-        processLen = chunkRemaining;
-      }
-
-      final nextReadSize =
-          ((chunkRemaining - processLen) < bufferSize)
-              ? (chunkRemaining - processLen)
-              : bufferSize;
-      Future<int>? pendingRead;
-      if (nextReadSize > 0) {
-        pendingRead = raf.readInto(nextBuf, 0, nextReadSize);
-      }
-
-      // CTR 批量加密
-      cipher.processBytes(readBuf, 0, processLen, procBuf, 0);
-      output.add(procBuf.sublist(0, processLen));
-      totalEncrypted += processLen;
-
-      if (progressPort != null && chunkLength > 0) {
-        progressPort.send({
-          'type': 'progress',
-          'value': totalEncrypted / chunkLength,
-          'chunkIndex': chunkIndex,
-          'totalChunks': totalChunks,
-        });
-      }
-
-      if (totalEncrypted >= chunkLength) { break; }
-
-      if (pendingRead != null) {
-        bytesRead = await pendingRead;
-      } else {
-        bytesRead = 0;
-      }
-
-      useA = !useA;
-    }
-  } finally {
-    raf.closeSync();
-    await output.flush();
-    await output.close();
-  }
-}
-
-/// 并行解密块 Worker：解密文件的一个指定区间，写入临时块文件
-///
-/// 接收主线程派发的 [startOffset] + [chunkLength] + 已调整的 [keyBase64]/[ivBase64]，
-/// 独立解密对应区间并写入临时文件，由主线程后续按偏移复制到输出文件。
-///
-/// 内部使用双缓冲流水线（4MB 缓冲区），I/O 预读与 CPU 解密并行。
-Future<void> _decryptChunkInIsolate({
-  required String inputPath,
-  required String outputPath,
-  required int startOffset,
-  required int chunkLength,
-  required int writeOffset,
-  required String keyBase64,
-  required String ivBase64,
-  required int chunkIndex,
-  required int totalChunks,
-  SendPort? progressPort,
-}) async {
-  final key = base64.decode(keyBase64);
-  final iv = base64.decode(ivBase64);
-
-  final cipher = CryptoUtils.createCtrCipher(Uint8List.fromList(key), Uint8List.fromList(iv));
-
-  // 加密数据起始偏移 = headerSize + startOffset（chunk 的 startOffset 是相对于密文数据的）
-  final fileStartOffset = headerSize + startOffset;
+  // 解密时需跳过文件头（startOffset 是相对于密文数据的）
+  final fileStartOffset = isDecrypt ? headerSize + startOffset : startOffset;
 
   final inputFile = File(inputPath);
   final raf = inputFile.openSync(mode: FileMode.read);
@@ -402,9 +314,8 @@ Future<void> _decryptChunkInIsolate({
     final procBuf = Uint8List(bufferSize);
 
     bool useA = true;
-    int totalDecrypted = 0;
+    int totalProcessed = 0;
 
-    // 第一块：如果剩余量小于 bufferSize，只读取剩余量
     final firstReadSize =
         (chunkLength < bufferSize) ? chunkLength : bufferSize;
     int bytesRead = raf.readIntoSync(bufA, 0, firstReadSize);
@@ -413,14 +324,12 @@ Future<void> _decryptChunkInIsolate({
       final readBuf = useA ? bufA : bufB;
       final nextBuf = useA ? bufB : bufA;
 
-      // 本轮要处理的字节数（不超过剩余块大小）
       int processLen = bytesRead;
-      final chunkRemaining = chunkLength - totalDecrypted;
+      final chunkRemaining = chunkLength - totalProcessed;
       if (processLen > chunkRemaining) {
         processLen = chunkRemaining;
       }
 
-      // 启动下一块的异步预读
       final nextReadSize =
           ((chunkRemaining - processLen) < bufferSize)
               ? (chunkRemaining - processLen)
@@ -430,27 +339,22 @@ Future<void> _decryptChunkInIsolate({
         pendingRead = raf.readInto(nextBuf, 0, nextReadSize);
       }
 
-      // 处理当前块：CTR 批量解密
+      // CTR 批量加/解密
       cipher.processBytes(readBuf, 0, processLen, procBuf, 0);
       output.add(procBuf.sublist(0, processLen));
-      totalDecrypted += processLen;
+      totalProcessed += processLen;
 
-      // 进度回传（按块内比例）
       if (progressPort != null && chunkLength > 0) {
         progressPort.send({
           'type': 'progress',
-          'value': totalDecrypted / chunkLength,
+          'value': totalProcessed / chunkLength,
           'chunkIndex': chunkIndex,
           'totalChunks': totalChunks,
         });
       }
 
-      // 本块处理完毕
-      if (totalDecrypted >= chunkLength) {
-        break;
-      }
+      if (totalProcessed >= chunkLength) { break; }
 
-      // 等待预读
       if (pendingRead != null) {
         bytesRead = await pendingRead;
       } else {

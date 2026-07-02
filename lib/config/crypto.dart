@@ -25,7 +25,10 @@ const int versionOffset = 32;
 /// 保留字段长度（31 字节，全零）
 const int reservedSize = 31;
 
-/// PBKDF2 迭代次数（v2: 1 万次）
+/// PBKDF2 迭代次数（v2: 10 次）
+///
+/// 固定密码场景下安全性靠密码本身强度，迭代次数设为 10 以减少派生开销。
+/// 若改为用户自定义密码，应提升至 100,000 次以上。
 const int pbkdf2Iterations = 10;
 
 /// 流式加解密缓冲区大小（4MB）
