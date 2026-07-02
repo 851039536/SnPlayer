@@ -46,6 +46,12 @@ class StreamingDecryptProxy {
   /// 内存块缓存（LRU），key 为块索引
   final _BlockCache _blockCache = _BlockCache();
 
+  /// 递增的请求 ID，用于 worker 精确取消单个 decrypt_range 请求
+  ///
+  /// 解决并发 Range 请求（视频轨+音频轨）时全局 cancelled 标志互相干扰的问题：
+  /// 每个 decrypt_range 分配唯一 ID，cancel 携带目标 ID，worker 仅取消匹配请求。
+  int _nextRequestId = 0;
+
   /// 启动代理服务器，返回分配的端口号。
   Future<int> start(String encPath) async {
     _encPath = encPath;
@@ -136,7 +142,7 @@ class StreamingDecryptProxy {
     _server = null;
 
     // 停止解密 worker Isolate
-    _workerSendPort?.send({'type': 'stop'});
+    // 注：kill(immediate) 会立即终止 Isolate，无需先 send('stop')（消息不会被处理）
     _worker?.kill(priority: Isolate.immediate);
     _worker = null;
     _workerSendPort = null;
@@ -366,8 +372,12 @@ class StreamingDecryptProxy {
     final replyPort = ReceivePort();
     SendPort? ackPort;
 
+    // 分配唯一 requestId，用于精确取消此请求（不影响并发的其他 decrypt_range）
+    final requestId = _nextRequestId++;
+
     _workerSendPort!.send({
       'type': 'decrypt_range',
+      'requestId': requestId,
       'rangeStart': currentPos,
       'contentLength': remaining,
       'replyPort': replyPort.sendPort,
@@ -376,7 +386,7 @@ class StreamingDecryptProxy {
     try {
       await for (final event in replyPort) {
         if (_stopped) {
-          _workerSendPort?.send({'type': 'cancel'});
+          _workerSendPort?.send({'type': 'cancel', 'requestId': requestId});
           ackPort?.send('ack');
           break;
         }
@@ -404,8 +414,8 @@ class StreamingDecryptProxy {
             response.add(data);
             await response.flush();
           } catch (e) {
-            // 连接已断开（播放器 seek/stop），取消 worker 任务
-            _workerSendPort?.send({'type': 'cancel'});
+            // 连接已断开（播放器 seek/stop），取消此 requestId 对应的 worker 任务
+            _workerSendPort?.send({'type': 'cancel', 'requestId': requestId});
             ackPort?.send('ack'); // 唤醒可能在等 ack 的 worker
             break;
           }
@@ -490,7 +500,11 @@ void _decryptWorkerEntry(SendPort mainPort) {
   Uint8List? key;
   Uint8List? iv;
   String? encPath;
-  bool cancelled = false;
+
+  // 按 requestId 跟踪取消，替代全局 cancelled 布尔值
+  // 并发 Range 请求（视频轨+音频轨）各自有唯一 requestId，
+  // cancel 携带目标 requestId，仅取消匹配请求，互不干扰
+  int? cancelledRequestId;
 
   receivePort.listen((message) async {
     if (message is! Map) {
@@ -506,7 +520,7 @@ void _decryptWorkerEntry(SendPort mainPort) {
     }
 
     if (type == 'cancel') {
-      cancelled = true;
+      cancelledRequestId = message['requestId'] as int;
       return;
     }
 
@@ -522,7 +536,7 @@ void _decryptWorkerEntry(SendPort mainPort) {
         return;
       }
 
-      cancelled = false;
+      final requestId = message['requestId'] as int;
       final replyPort = message['replyPort'] as SendPort;
       try {
         await _decryptRangeInWorker(
@@ -532,7 +546,7 @@ void _decryptWorkerEntry(SendPort mainPort) {
           key!,
           iv!,
           encPath!,
-          () => cancelled,
+          () => cancelledRequestId == requestId,
         );
       } catch (e) {
         replyPort.send({'type': 'error', 'message': e.toString()});

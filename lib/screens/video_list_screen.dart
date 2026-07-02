@@ -120,7 +120,9 @@ class _VideoListScreenState extends State<VideoListScreen> {
     _scrollController.dispose();
     context.read<VideoListProvider>().cancelThumbnailLoading();
     // 停止第三方播放器的流式解密代理
-    _externalProxy?.stop();
+    if (_externalProxy != null) {
+      unawaited(_externalProxy!.stop());
+    }
     super.dispose();
   }
 
@@ -521,6 +523,9 @@ class _VideoListScreenState extends State<VideoListScreen> {
 
       // 流式代理失败 → 降级全量解密
       if (e.code == 'NO_PLAYER') {
+        // 清理已启动的代理资源（openUrl 失败，代理仍在运行）
+        await _externalProxy?.stop();
+        _externalProxy = null;
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('没有找到可播放视频的应用，请安装 MX Player 或 VLC')),

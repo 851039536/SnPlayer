@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -94,7 +95,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         return;
       } catch (e) {
         debugPrint('[SnPlayer] VideoPlayerScreen: 流式代理失败，降级全量解密: $e');
-        // 清理代理资源
+        // 清理代理资源 + controller（_initWithProxy 内部可能已创建 controller）
+        _controller?.dispose();
+        _controller = null;
         await _proxy?.stop();
         _proxy = null;
         _usingProxy = false;
@@ -124,9 +127,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       Uri.parse(_proxy!.proxyUrl),
     );
 
-    await _controller!.initialize();
-    await _controller!.play();
-    _setLoading(false);
+    try {
+      await _controller!.initialize();
+      await _controller!.play();
+      _setLoading(false);
+    } catch (e) {
+      // initialize/play 失败时必须 dispose controller，避免 ExoPlayer 原生资源泄露
+      _controller?.dispose();
+      _controller = null;
+      rethrow;
+    }
   }
 
   /// 降级路径：全量解密后播放（原有逻辑）
@@ -173,7 +183,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     // stop() 内部首行即设置 _stopped=true 阻止新请求，
     // 后续异步清理（server close、文件 flush）可以 fire-and-forget
     if (_usingProxy && _proxy != null) {
-      _proxy!.stop();
+      unawaited(_proxy!.stop());
     }
 
     // 清理临时文件：
