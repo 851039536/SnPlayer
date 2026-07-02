@@ -232,14 +232,28 @@ class StreamingDecryptProxy {
     request.response.bufferOutput = false;
 
     try {
-      await _decryptAndStream(
+      final fullyWritten = await _decryptAndStream(
         request.response,
         rangeStart,
         contentLength,
       );
-      await request.response.close();
+      if (fullyWritten) {
+        await request.response.close();
+      } else {
+        // 提前终止（seek/取消/连接断开）：contentLength 头已发送但实际写入不足，
+        // close() 会抛 HttpException。用 detachSocket + destroy 重置 TCP 连接，
+        // 让播放器明确收到连接中断信号并发起新 Range 请求。
+        try {
+          final socket = await request.response.detachSocket();
+          socket.destroy();
+        } catch (_) {
+          try {
+            await request.response.close();
+          } catch (_) {}
+        }
+      }
     } catch (e) {
-      debugPrint('[SnPlayer] StreamingDecryptProxy: 流式响应异常: $e');
+      debugPrint('[SnPlayer] StreamingDecryptProxy: 请求处理异常: $e');
       try {
         await request.response.close();
       } catch (_) {}
@@ -324,7 +338,11 @@ class StreamingDecryptProxy {
   ///
   /// **缓存**：主线程侧 LRU 块缓存，命中时直接返回不经过 worker。
   /// worker 回传的整块数据也更新缓存。
-  Future<void> _decryptAndStream(
+  /// 解密并流式输出指定范围的数据
+  ///
+  /// 返回 true 表示完整写入了 contentLength 字节；
+  /// 返回 false 表示提前终止（seek/取消/连接断开/worker 错误）。
+  Future<bool> _decryptAndStream(
     HttpResponse response,
     int rangeStart,
     int contentLength,
@@ -353,20 +371,28 @@ class StreamingDecryptProxy {
         break;
       }
 
-      response.add(cachedBlock.sublist(blockOffset, actualEnd));
-      await response.flush();
+      try {
+        response.add(cachedBlock.sublist(blockOffset, actualEnd));
+        await response.flush();
+      } catch (e) {
+        // 连接已断开（seek/stop），提前终止
+        return false;
+      }
       remaining -= actualCopyLen;
       currentPos += actualCopyLen;
     }
 
-    if (remaining <= 0 || _stopped) {
-      return;
+    if (remaining <= 0) {
+      return true;
+    }
+    if (_stopped) {
+      return false;
     }
 
     // 阶段 2：缓存未命中部分交给 worker Isolate 解密
     if (_workerSendPort == null) {
       debugPrint('[SnPlayer] StreamingDecryptProxy: worker 不可用，跳过');
-      return;
+      return false;
     }
 
     final replyPort = ReceivePort();
@@ -388,7 +414,7 @@ class StreamingDecryptProxy {
         if (_stopped) {
           _workerSendPort?.send({'type': 'cancel', 'requestId': requestId});
           ackPort?.send('ack');
-          break;
+          return false;
         }
 
         if (event is! Map) {
@@ -417,23 +443,25 @@ class StreamingDecryptProxy {
             // 连接已断开（播放器 seek/stop），取消此 requestId 对应的 worker 任务
             _workerSendPort?.send({'type': 'cancel', 'requestId': requestId});
             ackPort?.send('ack'); // 唤醒可能在等 ack 的 worker
-            break;
+            return false;
           }
 
           // 发 ack，让 worker 继续下一块
           ackPort?.send('ack');
         } else if (type == 'done') {
-          break;
+          return true;
         } else if (type == 'cancelled') {
-          break;
+          return false;
         } else if (type == 'error') {
           debugPrint('[SnPlayer] StreamingDecryptProxy: worker 错误: ${event['message']}');
-          break;
+          return false;
         }
       }
     } finally {
       replyPort.close();
     }
+
+    return false;
   }
 
 }
@@ -501,10 +529,13 @@ void _decryptWorkerEntry(SendPort mainPort) {
   Uint8List? iv;
   String? encPath;
 
-  // 按 requestId 跟踪取消，替代全局 cancelled 布尔值
-  // 并发 Range 请求（视频轨+音频轨）各自有唯一 requestId，
-  // cancel 携带目标 requestId，仅取消匹配请求，互不干扰
-  int? cancelledRequestId;
+  // 用 Set 跟踪被取消的 requestId，支持并发取消（视频轨+音频轨同时 seek）
+  // 替代单一 int? cancelledRequestId，避免后发的 cancel 覆盖前一个
+  final cancelledRequests = <int>{};
+
+  // 每个活跃请求的 ackReceivePort.sendPort
+  // cancel 时通过它发 'cancel-ack' 唤醒卡在 await ack 中的任务，避免死锁
+  final requestAckPorts = <int, SendPort>{};
 
   receivePort.listen((message) async {
     if (message is! Map) {
@@ -520,7 +551,10 @@ void _decryptWorkerEntry(SendPort mainPort) {
     }
 
     if (type == 'cancel') {
-      cancelledRequestId = message['requestId'] as int;
+      final rid = message['requestId'] as int;
+      cancelledRequests.add(rid);
+      // 唤醒可能卡在 await ackReceivePort.first 中的任务
+      requestAckPorts[rid]?.send('cancel-ack');
       return;
     }
 
@@ -546,10 +580,16 @@ void _decryptWorkerEntry(SendPort mainPort) {
           key!,
           iv!,
           encPath!,
-          () => cancelledRequestId == requestId,
+          () => cancelledRequests.contains(requestId),
+          requestId,
+          requestAckPorts,
         );
       } catch (e) {
         replyPort.send({'type': 'error', 'message': e.toString()});
+      } finally {
+        // 清理：移除 ackPort 和取消标记，避免 Set/Map 无限增长
+        requestAckPorts.remove(requestId);
+        cancelledRequests.remove(requestId);
       }
     }
   });
@@ -568,12 +608,23 @@ Future<void> _decryptRangeInWorker(
   Uint8List iv,
   String encPath,
   bool Function() isCancelled,
+  int requestId,
+  Map<int, SendPort> requestAckPorts,
 ) async {
   const blockSize = 512 * 1024;
   const ackWindowSize = 2; // 每发 2 块等一次 ack，最多积压 ~1MB
 
   final ackReceivePort = ReceivePort();
   bool ackPortSent = false;
+
+  // 注册 ackPort，供 cancel 回调唤醒卡在 await ack 的任务
+  requestAckPorts[requestId] = ackReceivePort.sendPort;
+
+  // 用 StreamIterator 替代 ackReceivePort.first：
+  // ReceivePort 是 single-subscription stream，first 内部 listen+cancel 会关闭端口，
+  // 第二次 first 再 listen 会抛 "Stream has already been listened to"。
+  // StreamIterator 保持单个持久订阅，moveNext() 等待下一个事件，可多次调用。
+  final ackIterator = StreamIterator(ackReceivePort);
 
   final encFile = await File(encPath).open(mode: FileMode.read);
 
@@ -653,7 +704,7 @@ Future<void> _decryptRangeInWorker(
 
         // 窗口流控：每 ackWindowSize 块等一次 ack
         if (sentSinceLastAck >= ackWindowSize) {
-          await ackReceivePort.first;
+          await ackIterator.moveNext();
           sentSinceLastAck = 0;
         }
       }
@@ -665,6 +716,7 @@ Future<void> _decryptRangeInWorker(
     replyPort.send({'type': 'done'});
   } finally {
     await encFile.close();
+    await ackIterator.cancel();
     ackReceivePort.close();
   }
 }
