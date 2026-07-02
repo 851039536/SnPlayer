@@ -32,7 +32,10 @@ class CryptoService {
     return key;
   }
 
-  /// 加密文件（始终串行 Isolate 加密）
+  /// 加密文件（自动根据文件大小选择串行/并行路径）
+  ///
+  /// - 文件 < 64MB：单 Isolate 串行加密，避免 Isolate 启动开销 > 并行收益
+  /// - 文件 >= 64MB：多 Isolate 并行分块加密，2-6 路并行提速
   ///
   /// [inputPath] 原始视频文件路径
   /// [outputPath] 加密输出路径（.enc）
@@ -42,12 +45,17 @@ class CryptoService {
     String outputPath, {
     void Function(double)? onProgress,
   }) async {
-    await _runInIsolate(
-      command: 'encrypt',
-      inputPath: inputPath,
-      outputPath: outputPath,
-      onProgress: onProgress,
-    );
+    final fileSize = await File(inputPath).length();
+    if (fileSize >= parallelDecryptMinFileSize) {
+      await encryptFileParallel(inputPath, outputPath, onProgress: onProgress);
+    } else {
+      await _runInIsolate(
+        command: 'encrypt',
+        inputPath: inputPath,
+        outputPath: outputPath,
+        onProgress: onProgress,
+      );
+    }
   }
 
   /// 并行分块加密文件
@@ -398,104 +406,109 @@ class CryptoService {
     debugPrint('[SnPlayer] 并行解密: 文件=${fileSize}B, 密文=${cipherDataSize}B, '
         '分$isolateCount块, 每块≈${(chunkSize / 1024 / 1024).toStringAsFixed(1)}MB');
 
-    // 4. 预分配输出文件
+    // 4. 预分配输出文件，保持句柄打开直到所有批次写入完成
+    //
+    // 关键：不能用 FileMode.write 多次打开输出文件（会截断已写入数据），
+    // 整个并行流程复用同一句柄，由 try/finally 保证关闭。
     final outputFile = File(outputPath);
     final outputRaf = outputFile.openSync(mode: FileMode.write);
     outputRaf.setPositionSync(cipherDataSize - 1);
     outputRaf.writeByteSync(0);
-    outputRaf.closeSync();
+    // 注意：此处不 closeSync，保持句柄打开供 _writeBatchToOutput 复用
 
-    // 5. 分批启动 Isolate
-    final pendingFutures = <Future<void>>[];
-    final chunkTempPaths = <String>[];
-    final chunkWriteOffsets = <int>[];
+    try {
+      // 5. 分批启动 Isolate
+      final pendingFutures = <Future<void>>[];
+      final chunkTempPaths = <String>[];
+      final chunkWriteOffsets = <int>[];
 
-    for (int i = 0; i < isolateCount; i++) {
-      final startOffset = i * chunkSize;
-      final length = (i == isolateCount - 1)
-          ? cipherDataSize - startOffset
-          : chunkSize;
+      for (int i = 0; i < isolateCount; i++) {
+        final startOffset = i * chunkSize;
+        final length = (i == isolateCount - 1)
+            ? cipherDataSize - startOffset
+            : chunkSize;
 
-      // 计算调整后的 IV：counter += startOffset / 16
-      final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
-      final ivBase64 = base64.encode(adjustedIv);
+        // 计算调整后的 IV：counter += startOffset / 16
+        final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
+        final ivBase64 = base64.encode(adjustedIv);
 
-      // 临时块文件路径
-      final tempPath = '$outputPath.chunk_$i.tmp';
-      chunkTempPaths.add(tempPath);
-      chunkWriteOffsets.add(startOffset);
+        // 临时块文件路径
+        final tempPath = '$outputPath.chunk_$i.tmp';
+        chunkTempPaths.add(tempPath);
+        chunkWriteOffsets.add(startOffset);
 
-      final future = _spawnChunkIsolate(
-        inputPath: inputPath,
-        outputPath: tempPath,
-        startOffset: startOffset,
-        chunkLength: length,
-        writeOffset: startOffset,
-        keyBase64: keyBase64,
-        ivBase64: ivBase64,
-        chunkIndex: i,
-        totalChunks: isolateCount,
-        onProgress: onProgress,
-      );
+        final future = _spawnChunkIsolate(
+          inputPath: inputPath,
+          outputPath: tempPath,
+          startOffset: startOffset,
+          chunkLength: length,
+          writeOffset: startOffset,
+          keyBase64: keyBase64,
+          ivBase64: ivBase64,
+          chunkIndex: i,
+          totalChunks: isolateCount,
+          onProgress: onProgress,
+        );
 
-      pendingFutures.add(future);
+        pendingFutures.add(future);
 
-      // 每批 parallelDecryptMaxConcurrency 个，完成后复制到输出文件
-      if (pendingFutures.length >= parallelDecryptMaxConcurrency) {
+        // 每批 parallelDecryptMaxConcurrency 个，完成后复制到输出文件
+        if (pendingFutures.length >= parallelDecryptMaxConcurrency) {
+          await Future.wait(pendingFutures);
+          // 主线程将本批临时文件复制到输出文件对应偏移（复用已打开的句柄）
+          await _writeBatchToOutput(outputRaf, chunkTempPaths, chunkWriteOffsets);
+          // 清理临时文件
+          for (final p in chunkTempPaths) {
+            try { await File(p).delete(); } catch (_) {}
+          }
+          pendingFutures.clear();
+          chunkTempPaths.clear();
+          chunkWriteOffsets.clear();
+          // 让出事件循环，防止 UI 线程饥饿
+          await Future.delayed(Duration.zero);
+        }
+      }
+
+      // 6. 处理剩余的块
+      if (pendingFutures.isNotEmpty) {
         await Future.wait(pendingFutures);
-        // 主线程将本批临时文件复制到输出文件对应偏移
-        await _writeBatchToOutput(chunkTempPaths, chunkWriteOffsets, outputPath);
-        // 清理临时文件
+        await _writeBatchToOutput(outputRaf, chunkTempPaths, chunkWriteOffsets);
         for (final p in chunkTempPaths) {
           try { await File(p).delete(); } catch (_) {}
         }
-        pendingFutures.clear();
-        chunkTempPaths.clear();
-        chunkWriteOffsets.clear();
-        // 让出事件循环，防止 UI 线程饥饿
-        await Future.delayed(Duration.zero);
       }
-    }
 
-    // 6. 处理剩余的块
-    if (pendingFutures.isNotEmpty) {
-      await Future.wait(pendingFutures);
-      await _writeBatchToOutput(chunkTempPaths, chunkWriteOffsets, outputPath);
-      for (final p in chunkTempPaths) {
-        try { await File(p).delete(); } catch (_) {}
-      }
-    }
-
-    onProgress?.call(1.0);
-  }
-
-  /// 将一批临时块文件按各自偏移写入输出文件
-  static Future<void> _writeBatchToOutput(
-    List<String> tempPaths,
-    List<int> writeOffsets,
-    String outputPath,
-  ) async {
-    final outputRaf = File(outputPath).openSync(mode: FileMode.write);
-    try {
-      final copyBuf = Uint8List(bufferSize);
-      for (int i = 0; i < tempPaths.length; i++) {
-        final chunkFile = File(tempPaths[i]);
-        final raf = chunkFile.openSync(mode: FileMode.read);
-        try {
-          outputRaf.setPositionSync(writeOffsets[i]);
-          int bytesRead;
-          do {
-            bytesRead = raf.readIntoSync(copyBuf);
-            if (bytesRead > 0) {
-              outputRaf.writeFromSync(copyBuf, 0, bytesRead);
-            }
-          } while (bytesRead == bufferSize);
-        } finally {
-          raf.closeSync();
-        }
-      }
+      onProgress?.call(1.0);
     } finally {
       outputRaf.closeSync();
+    }
+  }
+
+  /// 将一批临时块文件按各自偏移写入已打开的输出文件句柄
+  ///
+  /// **重要**：调用方负责打开和关闭 [outputRaf]，避免使用 `FileMode.write`
+  /// 重复打开导致已写入的文件头和前序批次数据被截断清零。
+  static Future<void> _writeBatchToOutput(
+    RandomAccessFile outputRaf,
+    List<String> tempPaths,
+    List<int> writeOffsets,
+  ) async {
+    final copyBuf = Uint8List(bufferSize);
+    for (int i = 0; i < tempPaths.length; i++) {
+      final chunkFile = File(tempPaths[i]);
+      final raf = chunkFile.openSync(mode: FileMode.read);
+      try {
+        outputRaf.setPositionSync(writeOffsets[i]);
+        int bytesRead;
+        do {
+          bytesRead = raf.readIntoSync(copyBuf);
+          if (bytesRead > 0) {
+            outputRaf.writeFromSync(copyBuf, 0, bytesRead);
+          }
+        } while (bytesRead == bufferSize);
+      } finally {
+        raf.closeSync();
+      }
     }
   }
 
@@ -534,7 +547,10 @@ class CryptoService {
     debugPrint('[SnPlayer] 并行加密: 文件=${rawSize}B, '
         '分$isolateCount块, 每块≈${(chunkSize / 1024 / 1024).toStringAsFixed(1)}MB');
 
-    // 5. 写文件头 + 预分配输出文件（header + 密文）
+    // 5. 写文件头 + 预分配输出文件（header + 密文），保持句柄打开
+    //
+    // 关键：不能用 FileMode.write 多次打开输出文件（会截断已写入的 header），
+    // 整个并行流程复用同一句柄，由 try/finally 保证关闭。
     final cipherDataSize = rawSize; // 密文长度 = 原始长度
     final totalSize = headerSize + cipherDataSize;
     final outputFile = File(outputPath);
@@ -542,64 +558,68 @@ class CryptoService {
     outputRaf.writeFromSync(header, 0, headerSize);
     outputRaf.setPositionSync(totalSize - 1);
     outputRaf.writeByteSync(0);
-    outputRaf.closeSync();
+    // 注意：此处不 closeSync，保持句柄打开供 _writeBatchToOutput 复用
 
-    // 6. 分批启动加密 Isolate
-    final pendingFutures = <Future<void>>[];
-    final chunkTempPaths = <String>[];
-    final chunkWriteOffsets = <int>[];
+    try {
+      // 6. 分批启动加密 Isolate
+      final pendingFutures = <Future<void>>[];
+      final chunkTempPaths = <String>[];
+      final chunkWriteOffsets = <int>[];
 
-    for (int i = 0; i < isolateCount; i++) {
-      final startOffset = i * chunkSize;
-      final length = (i == isolateCount - 1)
-          ? rawSize - startOffset
-          : chunkSize;
+      for (int i = 0; i < isolateCount; i++) {
+        final startOffset = i * chunkSize;
+        final length = (i == isolateCount - 1)
+            ? rawSize - startOffset
+            : chunkSize;
 
-      // 计算调整后的 IV
-      final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
-      final adjustedIvBase64 = base64.encode(adjustedIv);
+        // 计算调整后的 IV
+        final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
+        final adjustedIvBase64 = base64.encode(adjustedIv);
 
-      final tempPath = '$outputPath.chunk_$i.tmp';
-      chunkTempPaths.add(tempPath);
-      // 密文数据在输出文件中的偏移 = 文件头 + 块起始位置
-      chunkWriteOffsets.add(headerSize + startOffset);
+        final tempPath = '$outputPath.chunk_$i.tmp';
+        chunkTempPaths.add(tempPath);
+        // 密文数据在输出文件中的偏移 = 文件头 + 块起始位置
+        chunkWriteOffsets.add(headerSize + startOffset);
 
-      final future = _spawnEncryptChunkIsolate(
-        inputPath: inputPath,
-        outputPath: tempPath,
-        startOffset: startOffset,
-        chunkLength: length,
-        keyBase64: keyBase64,
-        ivBase64: adjustedIvBase64,
-        chunkIndex: i,
-        totalChunks: isolateCount,
-        onProgress: onProgress,
-      );
+        final future = _spawnEncryptChunkIsolate(
+          inputPath: inputPath,
+          outputPath: tempPath,
+          startOffset: startOffset,
+          chunkLength: length,
+          keyBase64: keyBase64,
+          ivBase64: adjustedIvBase64,
+          chunkIndex: i,
+          totalChunks: isolateCount,
+          onProgress: onProgress,
+        );
 
-      pendingFutures.add(future);
+        pendingFutures.add(future);
 
-      if (pendingFutures.length >= parallelDecryptMaxConcurrency) {
+        if (pendingFutures.length >= parallelDecryptMaxConcurrency) {
+          await Future.wait(pendingFutures);
+          await _writeBatchToOutput(outputRaf, chunkTempPaths, chunkWriteOffsets);
+          for (final p in chunkTempPaths) {
+            try { await File(p).delete(); } catch (_) {}
+          }
+          pendingFutures.clear();
+          chunkTempPaths.clear();
+          chunkWriteOffsets.clear();
+          await Future.delayed(Duration.zero);
+        }
+      }
+
+      if (pendingFutures.isNotEmpty) {
         await Future.wait(pendingFutures);
-        await _writeBatchToOutput(chunkTempPaths, chunkWriteOffsets, outputPath);
+        await _writeBatchToOutput(outputRaf, chunkTempPaths, chunkWriteOffsets);
         for (final p in chunkTempPaths) {
           try { await File(p).delete(); } catch (_) {}
         }
-        pendingFutures.clear();
-        chunkTempPaths.clear();
-        chunkWriteOffsets.clear();
-        await Future.delayed(Duration.zero);
       }
-    }
 
-    if (pendingFutures.isNotEmpty) {
-      await Future.wait(pendingFutures);
-      await _writeBatchToOutput(chunkTempPaths, chunkWriteOffsets, outputPath);
-      for (final p in chunkTempPaths) {
-        try { await File(p).delete(); } catch (_) {}
-      }
+      onProgress?.call(1.0);
+    } finally {
+      outputRaf.closeSync();
     }
-
-    onProgress?.call(1.0);
   }
 
   /// 启动单个加密块 Isolate
