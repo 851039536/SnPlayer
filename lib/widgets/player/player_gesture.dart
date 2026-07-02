@@ -112,9 +112,11 @@ class _PlayerGestureState extends State<PlayerGesture> {
   ///
   /// 使用 Timer 字段管理，每次调用取消上一次的延迟回调，避免频繁操作时
   /// 延迟回调堆积反复调用 play()。
+  /// 延迟从 300ms 缩短到 100ms：ExoPlayer seek 后通常自动恢复播放，
+  /// 仅在 buffering 未自动恢复时需要 play() 兜底，100ms 足以判断。
   void _ensurePlayAfterSeek() {
     _playAfterSeekTimer?.cancel();
-    _playAfterSeekTimer = Timer(const Duration(milliseconds: 300), () {
+    _playAfterSeekTimer = Timer(const Duration(milliseconds: 100), () {
       if (mounted && !widget.controller.value.isPlaying) {
         widget.controller.play();
       }

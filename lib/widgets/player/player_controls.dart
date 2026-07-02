@@ -87,7 +87,7 @@ class _PlayerControlsState extends State<PlayerControls> {
   /// seek 后确保恢复播放
   void _ensurePlayAfterSeek() {
     _playAfterSeekTimer?.cancel();
-    _playAfterSeekTimer = Timer(const Duration(milliseconds: 300), () {
+    _playAfterSeekTimer = Timer(const Duration(milliseconds: 100), () {
       if (mounted && !widget.controller.value.isPlaying) {
         widget.controller.play();
       }
