@@ -77,18 +77,24 @@ offset 64+:    AES-256-CTR 密文
 
 `VideoPlayerScreen` 加载视频时按以下优先级尝试：
 
-1. **磁盘缓存命中** — 如果之前解密过且有有效缓存文件，直接使用本地缓存路径播放
-2. **流式解密代理** — 启动本地 HTTP 代理服务器（`StreamingDecryptProxy`），按需解密视频块（512KB），支持 HTTP Range 请求实现 seek。代理使用内存 LRU 块缓存（128 块 = 64MB），带节流机制
-3. **全量解密回退** — 当前两种方式不可用时，解密整个文件到临时目录再播放
+1. **磁盘缓存命中** — `PlaybackCacheManager` 校验缓存完整性（大小匹配 + 文件头非零验证），有效则直接播放本地文件
+2. **流式解密代理** — 启动本地 HTTP 代理服务器（`StreamingDecryptProxy`），利用 AES-CTR 随机访问特性 + 原生播放器 HTTP Range 请求实现按需解密：
+   - **长驻 Worker Isolate**：解密在独立 Isolate 执行，主线程零同步阻塞。每个请求分配唯一 `requestId`，支持并发 Range 请求（视频轨+音频轨）独立取消/完成，互不干扰
+   - **ack 窗口流控**：Worker 每发 4 块（~2MB）等待主线程 ack，防止超前解密导致内存积压
+   - **首块 64KB 快速返回**：seek 后首字节延迟从 ~100ms 降至 ~15ms，后续块恢复 512KB 提升吞吐
+   - **内存 LRU 块缓存**（128 块 = 64MB）：缓存命中时主线程直接返回，不经过 Worker。仅缓存 512KB 对齐的整块，避免索引错位导致 `Invalid NAL length` 解码错误
+   - **连接断开处理**：提前终止时 `detachSocket().destroy()` 发 RST 重置 TCP，让播放器明确收到中断信号并发起新 Range 请求
+3. **全量解密回退** — 前两种方式不可用时，解密整个文件到临时目录再播放（全量临时文件在 dispose 时自动删除）
 
-播放缓存管理（`PlaybackCacheManager`）：缓存最多保留 3 天，LRU 淘汰上限 500MB，每次启动自动清理过期缓存。
+缓存策略：`PlaybackCacheManager` 缓存最多保留 3 天，LRU 淘汰上限 500MB，每次启动自动清理过期缓存。用户可通过 `VideoListProvider.clearAllCache()` 手动清空全部缓存（播放 + 缩略图）。
 
 ### 存储与文件管理
 
-- **`StorageService`** — 管理加密视频目录（`LockVideo/`）和解密导出目录（`UnLockVideo/`），扫描 `.enc` 文件，维护 `.folders.json` 元数据，统计存储使用量
-- **`ThumbnailService`** — 生成缩略图（.tenc 加密格式），提取视频首帧，GIF 格式检测，磁盘缓存管理
+- **`StorageService`** — 管理加密视频目录（`MewTool/LockVideo/`）和解密导出目录（`MewTool/UnLockVideo/`），扫描 `.enc` 文件，维护 `.folders.json` 元数据，统计存储使用量。支持视频移动/重命名/文件夹 CRUD、孤儿缩略图清理
+- **`PlaybackCacheManager`** — 播放磁盘缓存管理：缓存完整性校验（文件大小比对 + 64 字节文件头非零验证，拦截全零脏缓存）、过期清理（3 天）、LRU 总量淘汰（上限 500MB）
+- **`ThumbnailService`** — 生成缩略图（.tenc 加密格式），提取视频首帧，GIF 格式检测，磁盘缓存管理。后台通过部分解密（前 30MB）从加密视频生成缩略图，避免全量解密开销
 - **`PathProviderService`** — 统一路径管理，提供 LockVideo / UnLockVideo / Cache / ThumbCache 四个目录的路径
-- **`SafeDeleteHelper`** — 安全删除：零覆写 + 指数退避重试（3s→6s→12s→24s→30s），另有快速删除模式用于临时文件
+- **`SafeDeleteHelper`** — 安全删除：零覆写 + 指数退避重试（3s→6s→12s→24s→30s），另有快速删除模式（3 次简单重试）用于播放缓存临时文件
 
 ### Android 原生通信
 
@@ -124,10 +130,10 @@ Android 三级权限回退策略：
 
 播放器由四个自建组件构成（未引入 chewie 等第三方播放器 UI 库，以保持加密工作流兼容性）：
 
-- **PlayerControls** — 底部控制栏：播放/暂停、±10s 跳过、倍速切换、全屏，4 秒自动隐藏渐隐动画
-- **PlayerGesture** — 手势层：双击左右半区 ±10s 跳过、水平滑动 seek、垂直滑动细粒度 seek
-- **PlayerProgressBar** — 进度条：缓冲区域显示（灰色）、点击跳转、拖动 seek、时间显示含小时
-- **SpeedSelector** — 倍速选择底部弹窗（0.5x / 0.75x / 1.0x / 1.25x / 1.5x / 2.0x 六档）
+- **PlayerControls** — 底部控制栏（始终可见）：倍速切换（左侧）、播放/暂停（中心圆形按钮）+ ±10s 跳过、全屏（右侧）。播放按钮含 500ms 重试机制（流式代理下 seek 后可能暂停）
+- **PlayerGesture** — 手势层：单击切换播放/暂停、双击左右半区 ±10s 跳过（带反馈动画）、水平滑动粗粒度 seek、垂直滑动细粒度 seek（2x 速度）。拖动时不实时 seek（避免加密视频频繁 seek 卡死），仅显示位置预览浮层，松手才真正 seek。seek 后 100ms 延迟恢复播放
+- **PlayerProgressBar** — 进度条：ExoPlayer 缓冲区域显示（灰色分段）、点击跳转、拖动 seek（实时预览）、时间显示含小时格式（h:mm:ss）
+- **SpeedSelector** — 倍速选择底部弹窗（0.5x / 0.75x / 1.0x / 1.25x / 1.5x / 2.0x 六档），当前速度高亮，选中自动关闭
 
 ### 关键代码规范
 
