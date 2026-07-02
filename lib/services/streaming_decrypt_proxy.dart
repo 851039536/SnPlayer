@@ -684,7 +684,13 @@ Future<void> _decryptRangeInWorker(
         final outputData =
             Uint8List.fromList(procBuf.sublist(outputStart, outputEnd));
         final blockIndex = alignedStart ~/ blockSize;
-        final isFullBlock = skipBytes == 0 && bytesRead >= blockSize;
+        // 仅当 alignedStart 是 blockSize 对齐时才缓存整块。
+        // 否则 blockIndex 与实际数据范围不对应（如 alignedStart=96 缓存到 blockIndex=0，
+        // 但数据是明文 96-524384 而非块 0 的 0-524287），seek 回退时返回错位数据 →
+        // ExoPlayer Invalid NAL length。
+        final isFullBlock = skipBytes == 0 &&
+            bytesRead >= blockSize &&
+            alignedStart % blockSize == 0;
 
         final blockMsg = <String, dynamic>{
           'type': 'block',
