@@ -1,3 +1,5 @@
+// lib/widgets/folder_tabs.dart — 文件夹标签栏（横向滚动/选中态高亮/长按进入管理）
+
 import 'package:flutter/material.dart';
 
 import '../models/video_folder.dart';
@@ -112,11 +114,16 @@ class FolderTabs extends StatelessWidget {
           ),
         ),
         child: Center(
-          child: Text(
-            label,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: isSelected ? color : colorScheme.onSurfaceVariant,
-              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 120),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: isSelected ? color : colorScheme.onSurfaceVariant,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+              ),
             ),
           ),
         ),

@@ -281,10 +281,19 @@ class StorageService {
         color: color,
       );
 
-      // 更新元数据
+      // 更新元数据；保存失败则回滚刚创建的物理目录，避免磁盘元数据与
+      // 内存状态分叉（否则重启后该文件夹会"消失"但空目录残留）
       final folders = await loadFolders();
       folders.add(folder);
-      await saveFolders(folders);
+      final saved = await saveFolders(folders);
+      if (!saved) {
+        try {
+          await folderDir.delete();
+        } catch (_) {
+          // 回滚删除失败：留下空目录，无元数据不显示为标签，不影响正确性
+        }
+        return null;
+      }
 
       return folder;
     } catch (e) {
@@ -299,19 +308,31 @@ class StorageService {
       final lockDir = await PathProviderService.getLockVideoDir();
       final folderDir = Directory(p.join(lockDir, folderName));
 
-      if (await folderDir.exists()) {
-        // 检查文件夹是否为空
+      final exists = await folderDir.exists();
+      if (exists) {
+        // 检查文件夹是否为空（非空拒绝，防止误删其中的视频）
         final contents = await folderDir.list().toList();
         if (contents.isNotEmpty) {
-          return false; // 文件夹非空，不允许删除
+          return false;
         }
-        await folderDir.delete();
       }
 
-      // 更新元数据
+      // 先持久化元数据：保存失败则不删物理目录，返回 false 保持内存与磁盘一致
       final folders = await loadFolders();
       folders.removeWhere((f) => f.name == folderName);
-      await saveFolders(folders);
+      final saved = await saveFolders(folders);
+      if (!saved) {
+        return false;
+      }
+
+      // 元数据已落盘，再删空物理目录（失败仅残留空目录，无碍正确性）
+      if (exists) {
+        try {
+          await folderDir.delete();
+        } catch (e) {
+          debugPrint('[SnPlayer] StorageService.deleteFolder: 删除物理目录失败: $e');
+        }
+      }
 
       return true;
     } catch (e) {

@@ -1,3 +1,5 @@
+// lib/providers/folder_provider.dart — 文件夹状态管理（增删改查/选中筛选，元数据操作委托 StorageService）
+
 import 'package:flutter/material.dart';
 
 import '../models/video_folder.dart';
@@ -70,9 +72,8 @@ class FolderProvider extends ChangeNotifier {
     }
   }
 
-  /// 删除文件夹
+  /// 删除文件夹（仅空文件夹可删，非空由 StorageService 拒绝）
   Future<bool> deleteFolder(String folderName) async {
-    // 检查文件夹是否为空
     final success = await StorageService.deleteFolder(folderName);
     if (success) {
       _folders.removeWhere((f) => f.name == folderName);
@@ -84,10 +85,4 @@ class FolderProvider extends ChangeNotifier {
     }
     return false;
   }
-
-  /// 获取当前选中的文件夹名称
-  String? get currentFolder => _selectedFolder;
-
-  /// 是否在"全部"视图
-  bool get isAllSelected => _selectedFolder == null;
 }

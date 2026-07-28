@@ -1,3 +1,5 @@
+// lib/models/video_folder.dart — 视频文件夹数据模型（物理名/显示名/颜色 + JSON 序列化）
+
 /// 视频文件夹数据模型
 class VideoFolder {
   /// 物理目录名（folder_yyyyMMddHHmmss_guid）

@@ -1,4 +1,4 @@
-
+// lib/models/video_item.dart — 视频数据模型（路径/显示名/所属文件夹/大小/加密时间/缩略图缓存）
 
 import 'package:flutter/foundation.dart';
 

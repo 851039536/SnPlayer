@@ -1,3 +1,5 @@
+// lib/screens/folder_manage_screen.dart — 文件夹管理弹窗（创建/重命名/改色/删除，就地刷新 + 名称校验）
+
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
@@ -59,6 +61,13 @@ class FolderManageSheet extends StatefulWidget {
 class _FolderManageSheetState extends State<FolderManageSheet> {
   static const _presetColors = AppColors.presetFolderColors;
 
+  /// 文件夹名称长度上限（防止超长名撑破标签布局）
+  static const int _maxNameLength = 20;
+
+  /// 本地可变副本：弹窗内增删改后就地刷新，无需重开
+  /// （show 时传入的 widget.folders 是快照，StatefulWidget 不监听 Provider）
+  late final List<FolderData> _folders = List.of(widget.folders);
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -73,12 +82,12 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
             // 拖拽指示条
             Center(
               child: Container(
-                margin: EdgeInsets.only(
+                margin: const EdgeInsets.only(
                   top: AppSpacing.spacing3, bottom: AppSpacing.spacing5),
                 width: 32,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: colorScheme.onSurfaceVariant.withOpacity(0.4),
+                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -105,10 +114,10 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
               ),
             ),
 
-            SizedBox(height: AppSpacing.spacing3),
+            const SizedBox(height: AppSpacing.spacing3),
 
             // 文件夹列表
-            if (widget.folders.isEmpty)
+            if (_folders.isEmpty)
               Padding(
                 padding: const EdgeInsets.all(AppSpacing.spacing8),
                 child: Text(
@@ -124,10 +133,10 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing5),
-                itemCount: widget.folders.length,
-                separatorBuilder: (_, __) => SizedBox(height: AppSpacing.spacing3),
+                itemCount: _folders.length,
+                separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.spacing3),
                 itemBuilder: (context, index) {
-                  final folder = widget.folders[index];
+                  final folder = _folders[index];
                   return _buildFolderRow(context, folder);
                 },
               ),
@@ -151,7 +160,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
           width: AppSizes.iconButtonSm,
           height: AppSizes.iconButtonSm,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.2),
+            color: color.withValues(alpha: 0.2),
             borderRadius: BorderRadius.circular(AppRadius.md),
           ),
           child: Icon(Icons.folder_rounded, color: color, size: AppSizes.iconMd),
@@ -193,6 +202,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
   void _showCreateDialog(BuildContext context) {
     final controller = TextEditingController();
     String selectedColor = _presetColors[0];
+    String? errorText;
     final colorScheme = Theme.of(context).colorScheme;
 
     showDialog(
@@ -205,13 +215,15 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
             children: [
               TextField(
                 controller: controller,
-                decoration: const InputDecoration(
+                maxLength: _maxNameLength,
+                decoration: InputDecoration(
                   hintText: '输入文件夹名称',
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
+                  errorText: errorText,
                 ),
                 autofocus: true,
               ),
-              SizedBox(height: AppSpacing.spacing4),
+              const SizedBox(height: AppSpacing.spacing4),
               Wrap(
                 spacing: AppSpacing.spacing3,
                 children: _presetColors.map((color) {
@@ -247,15 +259,22 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
             ),
             FilledButton(
               onPressed: () async {
-                if (controller.text.trim().isNotEmpty) {
-                  final ok = await widget.onCreate(
-                    controller.text.trim(),
-                    selectedColor,
-                  );
-                  if (ok && ctx.mounted) {
-                    Navigator.pop(ctx);
-                    Navigator.pop(context); // 关闭 BottomSheet
-                  }
+                final name = controller.text.trim();
+                if (name.isEmpty) {
+                  setDialogState(() => errorText = '请输入文件夹名称');
+                  return;
+                }
+                if (_isDuplicateName(name)) {
+                  setDialogState(() => errorText = '已存在同名文件夹');
+                  return;
+                }
+                final ok = await widget.onCreate(name, selectedColor);
+                if (!ctx.mounted) { return; }
+                if (ok) {
+                  Navigator.pop(ctx);
+                  Navigator.pop(context); // 关闭 BottomSheet
+                } else {
+                  setDialogState(() => errorText = '创建失败，请重试');
                 }
               },
               child: const Text('创建'),
@@ -268,36 +287,57 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
 
   void _showRenameDialog(BuildContext context, FolderData folder) {
     final controller = TextEditingController(text: folder.displayName);
+    String? errorText;
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('重命名文件夹'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            hintText: '输入新名称',
-            border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('重命名文件夹'),
+          content: TextField(
+            controller: controller,
+            maxLength: _maxNameLength,
+            decoration: InputDecoration(
+              hintText: '输入新名称',
+              border: const OutlineInputBorder(),
+              errorText: errorText,
+            ),
+            autofocus: true,
           ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              if (controller.text.trim().isNotEmpty) {
-                await widget.onRename(folder.name, controller.text.trim());
-                if (ctx.mounted) {
-                  Navigator.pop(ctx);
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final newName = controller.text.trim();
+                if (newName.isEmpty) {
+                  setDialogState(() => errorText = '请输入新名称');
+                  return;
                 }
-              }
-            },
-            child: const Text('确定'),
-          ),
-        ],
+                // 名称未变化：直接关闭，不触发保存
+                if (newName == folder.displayName) {
+                  Navigator.pop(ctx);
+                  return;
+                }
+                if (_isDuplicateName(newName)) {
+                  setDialogState(() => errorText = '已存在同名文件夹');
+                  return;
+                }
+                final ok = await widget.onRename(folder.name, newName);
+                if (!ctx.mounted) { return; }
+                if (ok) {
+                  Navigator.pop(ctx);
+                  _replaceFolder(folder.name, displayName: newName);
+                } else {
+                  setDialogState(() => errorText = '重命名失败，请重试');
+                }
+              },
+              child: const Text('确定'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -317,9 +357,11 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
             final isSelected = folder.color == color;
             return GestureDetector(
               onTap: () async {
-                await widget.onRecolor(folder.name, color);
-                if (ctx.mounted) {
-                  Navigator.pop(ctx);
+                final ok = await widget.onRecolor(folder.name, color);
+                if (!ctx.mounted) { return; }
+                Navigator.pop(ctx);
+                if (ok) {
+                  _replaceFolder(folder.name, color: color);
                 }
               },
               child: Container(
@@ -365,13 +407,14 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
             ),
             onPressed: () async {
               final ok = await widget.onDelete(folder.name);
-              if (ctx.mounted) {
-                Navigator.pop(ctx);
-                if (!ok) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('无法删除非空文件夹')),
-                  );
-                }
+              if (!ctx.mounted) { return; }
+              Navigator.pop(ctx);
+              if (ok) {
+                _removeFolder(folder.name);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('无法删除非空文件夹')),
+                );
               }
             },
             child: const Text('删除'),
@@ -379,6 +422,33 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
         ],
       ),
     );
+  }
+
+  /// 名称是否与现有文件夹重复（忽略首尾空格；用于创建与重命名查重）
+  bool _isDuplicateName(String name) {
+    return _folders.any((f) => f.displayName == name);
+  }
+
+  /// 就地替换某文件夹的显示名/颜色并刷新弹窗列表
+  void _replaceFolder(String name, {String? displayName, String? color}) {
+    final index = _folders.indexWhere((f) => f.name == name);
+    if (index == -1) { return; }
+    final old = _folders[index];
+    setState(() {
+      _folders[index] = FolderData(
+        name: old.name,
+        displayName: displayName ?? old.displayName,
+        color: color ?? old.color,
+        videoCount: old.videoCount,
+      );
+    });
+  }
+
+  /// 就地移除某文件夹并刷新弹窗列表
+  void _removeFolder(String name) {
+    setState(() {
+      _folders.removeWhere((f) => f.name == name);
+    });
   }
 
 }
