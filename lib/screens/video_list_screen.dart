@@ -471,10 +471,19 @@ class _VideoListScreenState extends State<VideoListScreen> {
       );
     }
 
-    final cacheCleaned = await videoProvider.clearAllCache();
-    final orphansCleaned = await videoProvider.cleanOrphanThumbnails();
-
-    if (mounted) { Navigator.pop(context); } // 关闭 loading
+    int cacheCleaned = 0;
+    int orphansCleaned = 0;
+    bool failed = false;
+    try {
+      cacheCleaned = await videoProvider.clearAllCache();
+      orphansCleaned = await videoProvider.cleanOrphanThumbnails();
+    } catch (e) {
+      failed = true;
+      debugPrint('[SnPlayer] VideoListScreen._cleanupCache: $e');
+    } finally {
+      // 无论成功失败都关闭 loading，避免 barrierDismissible:false 的圈永久卡死
+      if (mounted) { Navigator.pop(context); }
+    }
 
     // 重新加载缩略图
     unawaited(videoProvider.loadThumbnails());
@@ -483,8 +492,12 @@ class _VideoListScreenState extends State<VideoListScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '清理完成：缓存 $cacheCleaned 个，孤儿缩略图 $orphansCleaned 个',
+            failed
+                ? '清理未完成，请重试'
+                : '清理完成：缓存 $cacheCleaned 个，孤儿缩略图 $orphansCleaned 个',
           ),
+          backgroundColor:
+              failed ? Theme.of(context).colorScheme.error : null,
         ),
       );
     }

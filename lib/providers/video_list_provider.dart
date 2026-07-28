@@ -399,6 +399,12 @@ class VideoListProvider extends ChangeNotifier {
       video.thumbCachePath = null;
     }
 
+    // 4. 清除 Flutter 内存 ImageCache：缩略图缓存文件名固定（按 videoId），
+    // 删除磁盘文件后若不清内存缓存，重新生成同名文件时 Image.file 会命中
+    // 旧的解码图像，UI 显示过期/已删除的缩略图
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+
     if (deleted > 0) {
       debugPrint('[SnPlayer] VideoListProvider.clearAllCache: 清空 $deleted 个缓存文件');
       notifyListeners();

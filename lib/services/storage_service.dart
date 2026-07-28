@@ -400,8 +400,13 @@ class StorageService {
       if (entity is File && entity.path.endsWith('.tenc')) {
         final encPath = _replaceSuffix(entity.path, '.tenc', '.enc');
         if (!await File(encPath).exists()) {
-          await entity.delete();
-          deleted++;
+          try {
+            await entity.delete();
+            deleted++;
+          } catch (e) {
+            // 单文件删除失败（占用/权限）不中断整个清理
+            debugPrint('[SnPlayer] StorageService.cleanOrphanThumbnails: $e');
+          }
         }
       }
     }

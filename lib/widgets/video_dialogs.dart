@@ -91,7 +91,7 @@ class VideoDialogs {
       builder: (ctx) => AlertDialog(
         title: const Text('清理缓存'),
         content: const Text(
-          '将清空所有播放缓存和缩略图缓存。\n'
+          '将清空所有播放缓存和缩略图缓存，并清理无对应视频的残留缩略图。\n'
           '下次播放视频时需要重新解密，缩略图也会重新生成。\n\n'
           '确定要清理吗？',
         ),
