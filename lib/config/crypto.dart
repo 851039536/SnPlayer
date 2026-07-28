@@ -67,9 +67,6 @@ const int partialDecryptMaxBytes = 30 * 1024 * 1024;
 /// 缩略图分批加载每批数量
 const int thumbnailBatchSize = 8;
 
-/// 播放临时文件自动删除延迟（毫秒）
-const int playCacheDeleteDelayMs = 30000;
-
 /// 安全删除零覆写块大小（1MB）
 ///
 /// 过小的块（如 4KB）会使 1GB 文件需要 26 万次异步写往返，耗时数分钟。
@@ -142,6 +139,12 @@ const int streamingDecryptBlockSize = 512 * 1024;
 ///
 /// LRU 策略淘汰最久未访问的块，控制内存占用。
 const int streamingMaxCacheBlocks = 128;
+
+/// 流式解密 ack 窗口大小（块数）
+///
+/// worker 每发此数量的块后等主线程 ack，最多积压 ~2MB，
+/// 防止超前解密导致内存积压，同时减少 seek 后的等待次数。
+const int streamingAckWindowSize = 4;
 
 /// 磁盘播放缓存总上限（500MB）
 ///

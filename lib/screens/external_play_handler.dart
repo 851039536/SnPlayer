@@ -1,7 +1,5 @@
 // lib/screens/external_play_handler.dart — 第三方播放器打开逻辑（缓存直开/流式代理/全量解密降级 + 进度对话框）
 
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -127,12 +125,14 @@ class ExternalPlayHandler {
       await _proxy?.stop();
       _proxy = null;
 
-      final unlockDir = await PathProviderService.getUnlockVideoDir();
-      await Directory(unlockDir).create(recursive: true);
-      final tempPath = '$unlockDir/${video.displayName}.mp4';
-      await CryptoService.decryptFile(
+      // 解密到 play_cache 播放缓存（受 3 天过期 + 500MB LRU 管理，
+      // 二次播放直接命中阶段 1）。不写公共 UnLockVideo 目录：那是用户
+      // 主动"解密导出"的目标目录，降级产物写入会造成明文永久残留，
+      // 且与同名导出文件互踩。FileProvider 的 cache-path 已覆盖此目录。
+      final cacheDir = await PathProviderService.getCacheDir();
+      final tempPath = await CryptoService.decryptToTemp(
         video.encPath,
-        tempPath,
+        cacheDir,
         onProgress: controller.updateProgress,
       );
 

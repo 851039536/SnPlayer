@@ -125,37 +125,4 @@ class SafeDeleteHelper {
 
     return false;
   }
-
-  /// 清理播放缓存目录中超过 maxAge 的临时文件
-  static Future<int> cleanupCacheFiles(String cacheDir, Duration maxAge) async {
-    final dir = Directory(cacheDir);
-    if (!await dir.exists()) {
-      return 0;
-    }
-
-    int deletedCount = 0;
-    final now = DateTime.now();
-
-    await for (final entity in dir.list()) {
-      if (entity is! File) {
-        continue;
-      }
-      try {
-        final stat = await entity.stat();
-        final age = now.difference(stat.modified);
-        if (age > maxAge) {
-          // 播放临时文件非敏感数据，用快速删除（与 PlaybackCacheManager 策略一致），
-          // 避免对数百 MB 缓存做无谓零覆写
-          if (await fastDelete(entity.path)) {
-            deletedCount++;
-          }
-        }
-      } catch (e) {
-        // 单个文件异常（如被并发删除）不中断整个清理
-        debugPrint('[SnPlayer] SafeDeleteHelper.cleanupCacheFiles: $e');
-      }
-    }
-
-    return deletedCount;
-  }
 }

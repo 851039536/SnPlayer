@@ -69,7 +69,7 @@ offset 64+:    AES-256-CTR 密文
 关键设计：
 - `CryptoService` 使用 **Isolate** 在后台线程执行加解密，避免阻塞 UI。
 - 加密/解密均支持**多 Isolate 并行分块**，`encryptFile`/`decryptFile` 会根据文件大小自动选择路径：≥64MB 走并行（2-6 路），否则串行。并行分块调度器已拆分至 `parallel_crypto_scheduler.dart`（加/解密共用同一参数化调度流程，异步批量合并 + 复制总量校验）。并行路径曾存在文件头版本字节（偏移 32）被截断为 0x00 的 bug，根因是 `_writeBatchToOutput` 使用 `FileMode.write`（等同 `O_TRUNC`）重复打开输出文件，清空了已写入的 64 字节文件头。已于 2026-07-02 修复：改为在整个并行流程中复用同一 `RandomAccessFile` 句柄，由 `try/finally` 保证关闭。并行失败时会清理临时 chunk 文件和损坏的输出文件，进度回调单调递增避免多 chunk 交错跳变。
-- 解密到播放缓存（`decryptToTemp`）先写 `.decrypting.tmp` 再原子 rename 到最终名，防止预分配/半写入的文件被 `PlaybackCacheManager` 误判为有效缓存（TOCTOU）。
+- 解密到播放缓存（`decryptToTemp`）先写带微秒时间戳唯一名的 `.decrypting.tmp` 再原子 rename 到最终名，防止半成品被 `PlaybackCacheManager` 误判为有效缓存（TOCTOU）及并发解密同名互踩；rename 失败时若目标缓存大小等于期望解密大小则视为并发赢家已就位正常返回；rename 成功后触发写后容量清理（500MB LRU，豁免刚产出的文件）。
 - 密钥派生结果使用 LRU 缓存（容量 100），避免重复 PBKDF2 计算。
 - `crypto_isolate.dart` 是 Isolate Worker，在独立线程中执行 encrypt/decrypt 命令，采用双缓冲流水线（4MB 缓冲区）。
 - `utils/crypto_utils.dart` 是纯 Dart 的密码学工具函数（含 64 字节文件头的统一解析/构建 `parseEncHeader`/`buildEncHeader`），不依赖 Flutter/Isolate，可跨平台使用。
@@ -85,9 +85,9 @@ offset 64+:    AES-256-CTR 密文
    - **首块 64KB 快速返回**：seek 后首字节延迟从 ~100ms 降至 ~15ms，后续块恢复 512KB 提升吞吐
    - **内存 LRU 块缓存**（128 块 = 64MB）：缓存命中时主线程直接返回，不经过 Worker。仅缓存 512KB 对齐的整块，避免索引错位导致 `Invalid NAL length` 解码错误
    - **连接断开处理**：提前终止时 `detachSocket().destroy()` 发 RST 重置 TCP，让播放器明确收到中断信号并发起新 Range 请求
-3. **全量解密回退** — 前两种方式不可用时，解密整个文件到临时目录再播放（全量临时文件在 dispose 时自动删除）；解密期间播放页 loading 视图显示线性进度条 +「正在解密 xx%」
+3. **全量解密回退** — 前两种方式不可用时，解密整个文件到 play_cache 缓存路径再播放，**产物保留为缓存**（二次播放阶段 1 直接命中），生命周期由过期/LRU 清理管理；解密期间播放页 loading 视图显示线性进度条 +「正在解密 xx%」。注：流式代理是纯内存解密（内存 LRU 块缓存），不落盘、不产生磁盘缓存
 
-缓存策略：`PlaybackCacheManager` 缓存最多保留 3 天，LRU 淘汰上限 500MB，每次启动自动清理过期缓存。用户可通过 `VideoListProvider.clearAllCache()` 手动清空全部缓存（播放 + 缩略图）。
+缓存策略：`PlaybackCacheManager` 缓存最多保留 3 天，LRU 淘汰上限 500MB；缓存命中时 touch mtime（真 LRU 而非 FIFO）；除启动清理（延迟 5 秒避免与首屏竞争 IO）外，每次 `decryptToTemp` 写入后也触发容量清理。清理过滤必须按 basename 双条件（`play_` 前缀 + `.mp4` 后缀）判定正式缓存——缓存目录名就叫 play_cache，对全路径 `contains('play_')` 恒为真会误伤临时文件；启动清理同时回收超过 1 小时的孤儿临时文件（.decrypting.tmp/.chunk_N.tmp/thumbgen_/thumb_partial_）。第三方播放的全量解密降级产物同样写入 play_cache（不再写公共 UnLockVideo 目录，避免明文残留与用户导出文件互踩）。用户可通过 `VideoListProvider.clearAllCache()` 手动清空全部缓存（播放 + 缩略图，跳过近 2 分钟内修改的在途文件）。
 
 ### 加解密进度 UI
 
@@ -102,7 +102,7 @@ offset 64+:    AES-256-CTR 密文
 ### 存储与文件管理
 
 - **`StorageService`** — 管理加密视频目录（`MewTool/LockVideo/`）和解密导出目录（`MewTool/UnLockVideo/`），扫描 `.enc` 文件，维护 `.folders.json` 元数据，统计存储使用量。支持视频移动/重命名/文件夹 CRUD、孤儿缩略图清理
-- **`PlaybackCacheManager`** — 播放磁盘缓存管理：缓存完整性校验（文件大小比对 + 64 字节文件头非零验证，拦截全零脏缓存）、过期清理（3 天）、LRU 总量淘汰（上限 500MB）
+- **`PlaybackCacheManager`** — 播放磁盘缓存管理：缓存完整性校验（文件大小比对 + 64 字节文件头非零防御性验证）、命中 touch mtime（真 LRU）、单次目录遍历完成过期清理（3 天）+ LRU 总量淘汰（上限 500MB，支持 exemptPath 豁免）+ 孤儿临时文件回收（1 小时阈值），过滤按 basename 双条件判定
 - **`ThumbnailService`** — 生成缩略图（.tenc 加密格式），提取视频首帧，GIF 格式检测，磁盘缓存管理。后台通过部分解密（前 30MB）从加密视频生成缩略图，避免全量解密开销
 - **`PathProviderService`** — 统一路径管理，提供 LockVideo / UnLockVideo / Cache / ThumbCache 四个目录的路径
 - **`SafeDeleteHelper`** — 安全删除：零覆写（1MB 块，append 模式打开避免 O_TRUNC 截断导致覆写失效）+ 指数退避重试（3s→6s→12s→24s→30s），另有快速删除模式（3 次简单重试）用于播放缓存临时文件

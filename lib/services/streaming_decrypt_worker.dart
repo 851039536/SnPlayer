@@ -113,7 +113,7 @@ Future<void> _decryptRangeInWorker(
   Map<int, SendPort> requestAckPorts,
 ) async {
   const blockSize = streamingDecryptBlockSize;
-  const ackWindowSize = 4; // 每发 4 块等一次 ack，最多积压 ~2MB，减少 seek 后等待次数
+  const ackWindowSize = streamingAckWindowSize; // 每窗口等一次 ack，防超前解密内存积压
 
   final ackReceivePort = ReceivePort();
   bool ackPortSent = false;

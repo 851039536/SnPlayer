@@ -64,8 +64,11 @@ class VideoListProvider extends ChangeNotifier {
   }
 
   /// 启动时的播放缓存清理（失败不影响主流程）
+  ///
+  /// 延迟 5 秒执行，避免与首屏扫描/缩略图批量加载竞争 IO
   Future<void> _runStartupCacheCleanup() async {
     try {
+      await Future.delayed(const Duration(seconds: 5));
       final cacheDir = await PathProviderService.getCacheDir();
       await PlaybackCacheManager.performCleanup(cacheDir);
     } catch (e) {
@@ -375,15 +378,6 @@ class VideoListProvider extends ChangeNotifier {
     return await StorageService.getStorageStats();
   }
 
-  /// 清理缓存文件
-  Future<int> cleanupCache() async {
-    final cacheDir = await PathProviderService.getCacheDir();
-    return await SafeDeleteHelper.cleanupCacheFiles(
-      cacheDir,
-      const Duration(minutes: 2),
-    );
-  }
-
   /// 清空全部缓存（播放缓存 + 缩略图磁盘缓存）
   ///
   /// 用户主动点击"清理缓存"时调用，删除 play_cache/ 和 thumb_cache/ 下的所有文件。
@@ -414,18 +408,34 @@ class VideoListProvider extends ChangeNotifier {
   }
 
   /// 删除目录下所有文件（非递归，仅顶层文件）
+  ///
+  /// 跳过近 2 分钟内修改过的文件：正在写入的 .decrypting.tmp 被 unlink
+  /// 会导致后续 rename 失败、正在写的 .chunk_N.tmp 被删会使并行解密
+  /// 合并阶段报错（在途写入护栏）
   Future<int> _deleteAllFilesInDir(String dirPath) async {
     final dir = Directory(dirPath);
     if (!await dir.exists()) {
       return 0;
     }
 
+    const inFlightGuard = Duration(minutes: 2);
+    final now = DateTime.now();
     int count = 0;
     await for (final entity in dir.list()) {
-      if (entity is File) {
+      if (entity is! File) {
+        continue;
+      }
+      try {
+        final stat = await entity.stat();
+        if (now.difference(stat.modified) < inFlightGuard) {
+          continue;
+        }
         if (await SafeDeleteHelper.fastDelete(entity.path)) {
           count++;
         }
+      } catch (e) {
+        // 单文件异常（如被并发删除）不中断整个清理
+        debugPrint('[SnPlayer] VideoListProvider._deleteAllFilesInDir: $e');
       }
     }
     return count;

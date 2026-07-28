@@ -112,12 +112,25 @@ class CryptoService {
 
     // 先解密到 .decrypting.tmp，完成后原子 rename 到最终名：
     // 直接写最终名时，预分配/半写入的文件大小和头部内容都会通过
-    // PlaybackCacheManager 的缓存校验，半成品会被当作有效缓存播放（TOCTOU）
-    final decryptingPath = '$tempPath.decrypting.tmp';
+    // PlaybackCacheManager 的缓存校验，半成品会被当作有效缓存播放（TOCTOU）。
+    // tmp 名含微秒时间戳：快速退出/重进同一视频时两个解密任务并发，
+    // 固定名会导致互写同一 tmp、后完成者 rename 因源文件消失而报错
+    final decryptingPath =
+        '$tempPath.${DateTime.now().microsecondsSinceEpoch}.decrypting.tmp';
     try {
       await decryptFile(encPath, decryptingPath, onProgress: onProgress);
       await File(decryptingPath).rename(tempPath);
     } catch (e) {
+      // 并发赢家容忍：若目标缓存已存在且大小等于期望解密大小，
+      // 说明并发的另一任务已产出有效缓存，删除自身 tmp 后正常返回
+      if (await _isCompleteCacheFile(encPath, tempPath)) {
+        try {
+          await File(decryptingPath).delete();
+        } catch (_) {
+          // 忽略：孤儿 tmp 由启动清理回收
+        }
+        return tempPath;
+      }
       // 失败只清理自己的 .tmp，不触碰可能存在的有效缓存
       try {
         await File(decryptingPath).delete();
@@ -127,7 +140,28 @@ class CryptoService {
       rethrow;
     }
 
+    // 写后容量执行：500MB 上限从"每次冷启动执行一次"变为"每次写入后执行"，
+    // 豁免刚产出的文件防止自删（即将被播放）
+    unawaited(PlaybackCacheManager.cleanupOversizedCache(
+      cacheDir,
+      exemptPath: tempPath,
+    ));
+
     return tempPath;
+  }
+
+  /// 校验既有缓存文件大小是否等于期望解密大小（并发赢家判定）
+  static Future<bool> _isCompleteCacheFile(String encPath, String cachePath) async {
+    try {
+      final cacheFile = File(cachePath);
+      if (!await cacheFile.exists()) {
+        return false;
+      }
+      final expected = await File(encPath).length() - headerSize;
+      return await cacheFile.length() == expected;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 部分解密到临时文件（仅解密用于缩略图提取的前 N MB）

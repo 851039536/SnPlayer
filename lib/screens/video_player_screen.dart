@@ -50,9 +50,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   /// 标记当前播放源是否为代理（dispose 时需停止代理）
   bool _usingProxy = false;
 
-  /// 标记当前播放源是否为缓存文件（dispose 时不删除）
-  bool _usingCache = false;
-
   bool _isFullscreen = false;
 
   /// 全量解密回退的进度（0.0~1.0），null = 未进入全量解密阶段
@@ -77,18 +74,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         debugPrint('[SnPlayer] VideoPlayerScreen: 磁盘缓存命中，直接播放');
         try {
           _tempPath = cachedFile;
-          _usingCache = true;
           _controller = VideoPlayerController.file(File(cachedFile));
           await _controller!.initialize();
           await _controller!.play();
           _setLoading(false);
           return;
         } catch (e) {
-          // 缓存文件损坏（如流式代理遗留的全零文件），删除并降级
+          // 缓存文件损坏（如磁盘异常/半成品残留），删除并降级
           debugPrint('[SnPlayer] VideoPlayerScreen: 缓存播放失败，降级到流式代理: $e');
           _controller?.dispose();
           _controller = null;
-          _usingCache = false;
           _tempPath = null;
           await SafeDeleteHelper.fastDelete(cachedFile);
         }
@@ -144,7 +139,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
   }
 
-  /// 降级路径：全量解密后播放（原有逻辑），解密进度显示在 loading 视图
+  /// 降级路径：全量解密后播放，解密进度显示在 loading 视图
+  ///
+  /// 解密产物写入 play_ 缓存路径并保留（二次播放阶段 1 直接命中），
+  /// 生命周期交给 PlaybackCacheManager 的 3 天过期 + 500MB LRU 管理。
   Future<void> _initWithFullDecrypt(String cacheDir) async {
     debugPrint('[SnPlayer] VideoPlayerScreen: 全量解密播放');
     _tempPath = await CryptoService.decryptToTemp(
@@ -207,13 +205,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       unawaited(_proxy!.stop());
     }
 
-    // 清理临时文件：
-    // - 缓存命中的文件不删除（保留供二次播放）
-    // - 代理播放的文件不删除（流式写入的缓存，保留供二次播放）
-    // - 全量解密的临时文件删除（每次重新解密）
-    if (_tempPath != null && !_usingCache && !_usingProxy) {
-      SafeDeleteHelper.fastDelete(_tempPath!);
-    }
+    // 磁盘缓存文件（缓存命中/全量解密产物）均保留供二次播放，
+    // 由 PlaybackCacheManager 的过期/LRU 清理管理生命周期；
+    // 代理播放纯内存解密不落盘（_tempPath 恒为 null），无需清理
 
     super.dispose();
   }
