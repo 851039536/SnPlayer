@@ -1,3 +1,5 @@
+// lib/screens/video_player_screen.dart — 视频播放页面（三段式降级播放 + 全量解密百分比进度）
+
 import 'dart:async';
 import 'dart:io';
 
@@ -52,6 +54,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _usingCache = false;
 
   bool _isFullscreen = false;
+
+  /// 全量解密回退的进度（0.0~1.0），null = 未进入全量解密阶段
+  double? _decryptProgress;
 
   @override
   void initState() {
@@ -139,14 +144,30 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
   }
 
-  /// 降级路径：全量解密后播放（原有逻辑）
+  /// 降级路径：全量解密后播放（原有逻辑），解密进度显示在 loading 视图
   Future<void> _initWithFullDecrypt(String cacheDir) async {
     debugPrint('[SnPlayer] VideoPlayerScreen: 全量解密播放');
-    _tempPath = await CryptoService.decryptToTemp(widget.encPath, cacheDir);
+    _tempPath = await CryptoService.decryptToTemp(
+      widget.encPath,
+      cacheDir,
+      onProgress: _onDecryptProgress,
+    );
     _controller = VideoPlayerController.file(File(_tempPath!));
     await _controller!.initialize();
     await _controller!.play();
     _setLoading(false);
+  }
+
+  /// 解密进度回调（整数百分比变化才 setState，避免高频重建）
+  void _onDecryptProgress(double value) {
+    final oldPercent =
+        _decryptProgress == null ? -1 : (_decryptProgress! * 100).floor();
+    if ((value * 100).floor() == oldPercent) { return; }
+    if (mounted) {
+      setState(() {
+        _decryptProgress = value;
+      });
+    }
   }
 
   void _setLoading(bool loading) {
@@ -231,14 +252,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Widget _buildContent(ColorScheme colorScheme) {
     if (_isLoading) {
-      return const Column(
+      final progress = _decryptProgress;
+      return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(color: Colors.white70),
-          SizedBox(height: AppSpacing.spacing5),
+          if (progress == null)
+            const CircularProgressIndicator(color: Colors.white70)
+          else
+            SizedBox(
+              width: 220,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(3),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                  color: Colors.white70,
+                  backgroundColor: Colors.white24,
+                ),
+              ),
+            ),
+          const SizedBox(height: AppSpacing.spacing5),
           Text(
-            '准备播放...',
-            style: TextStyle(color: Colors.white70, fontSize: AppFontSize.sm),
+            progress == null
+                ? '准备播放...'
+                : '正在解密 ${(progress * 100).floor()}%',
+            style: const TextStyle(color: Colors.white70, fontSize: AppFontSize.sm),
           ),
         ],
       );

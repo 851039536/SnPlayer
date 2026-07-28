@@ -1,3 +1,5 @@
+// lib/providers/video_list_provider.dart — 视频列表状态管理（CRUD/批量加密/解密导出/缩略图懒加载/存储统计）
+
 import 'dart:async';
 import 'dart:io';
 
@@ -14,6 +16,7 @@ import '../services/safe_delete_helper.dart';
 import '../services/thumbnail_service.dart';
 import '../services/path_provider_service.dart';
 import '../utils/cancellable.dart';
+import '../widgets/crypto_progress_dialog.dart';
 
 /// 视频列表状态管理
 ///
@@ -78,12 +81,12 @@ class VideoListProvider extends ChangeNotifier {
     return _videos.where((v) => v.folderName == folderName).toList();
   }
 
-  /// 选择并加密视频
+  /// 选择要加密的视频文件，返回路径列表（空列表 = 用户取消）
   ///
   /// 使用 FileType.custom 而非 FileType.video，
   /// 在拥有 MANAGE_EXTERNAL_STORAGE 时能直接浏览文件系统（完全访问），
   /// 而非走 SAF 媒体库选择器（安全访问）。
-  Future<void> pickAndEncryptVideos({String? targetFolder}) async {
+  Future<List<String>> pickVideoFiles() async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const [
@@ -93,19 +96,35 @@ class VideoListProvider extends ChangeNotifier {
       allowMultiple: true,
     );
 
-    if (result == null || result.files.isEmpty) { return; }
+    if (result == null || result.files.isEmpty) { return const []; }
+    return [
+      for (final file in result.files)
+        if (file.path != null) file.path!,
+    ];
+  }
 
-    for (final file in result.files) {
-      if (file.path == null) { continue; }
+  /// 批量加密视频文件，返回成功/失败计数
+  ///
+  /// 进度通过 [controller] 上报给模态进度对话框。
+  /// 加密期间视频尚未出现在列表中，不写 processingState（卡片徽章无处渲染）。
+  Future<({int success, int failed})> encryptVideos(
+    List<String> paths, {
+    String? targetFolder,
+    CryptoProgressController? controller,
+  }) async {
+    int success = 0;
+    int failed = 0;
 
-      final videoId = p.basename(file.path!);
-      _setProcessingState(videoId, '正在加密...');
+    for (int i = 0; i < paths.length; i++) {
+      final path = paths[i];
+      final baseName = p.basename(path);
+      controller?.nextFile(
+        fileName: baseName, current: i + 1, total: paths.length,
+      );
 
       try {
         // 生成加密文件名
-        final encryptedName = StorageService.generateEncryptedFileName(
-          p.basename(file.path!),
-        );
+        final encryptedName = StorageService.generateEncryptedFileName(baseName);
 
         final folderName = targetFolder ?? '';
         final encPath = await StorageService.buildEncPath(folderName, encryptedName);
@@ -113,24 +132,20 @@ class VideoListProvider extends ChangeNotifier {
 
         // 加密视频文件
         await CryptoService.encryptFile(
-          file.path!,
+          path,
           encPath,
-          onProgress: (progress) {
-            _setProcessingState(videoId, '加密中 ${(progress * 100).toStringAsFixed(0)}%');
-          },
+          onProgress: (progress) => controller?.updateProgress(progress),
         );
 
         // 生成加密缩略图
-        final thumbResult = await ThumbnailService.generateAndEncryptThumbnail(file.path!, thumbPath);
+        final thumbResult = await ThumbnailService.generateAndEncryptThumbnail(path, thumbPath);
         if (thumbResult == null) {
-          debugPrint('[SnPlayer] VideoListProvider.pickAndEncryptVideos: thumbnail generation failed for ${file.path}');
+          debugPrint('[SnPlayer] VideoListProvider.encryptVideos: thumbnail generation failed for $path');
         }
+        success++;
       } catch (e) {
-        debugPrint('[SnPlayer] VideoListProvider.pickAndEncryptVideos: $e');
-        _setProcessingState(videoId, '加密失败');
-        await Future.delayed(const Duration(seconds: 3));
-      } finally {
-        _removeProcessingState(videoId);
+        debugPrint('[SnPlayer] VideoListProvider.encryptVideos: $e');
+        failed++;
       }
     }
 
@@ -138,10 +153,17 @@ class VideoListProvider extends ChangeNotifier {
     await loadVideos();
     // 立即加载缩略图，让新添加的视频可见时就有封面
     unawaited(loadThumbnails());
+
+    return (success: success, failed: failed);
   }
 
   /// 解密视频到导出目录
-  Future<bool> decryptAndExport(VideoItem video) async {
+  ///
+  /// 进度双通道：卡片徽章（processingState 文本）+ 模态进度对话框（[controller]）
+  Future<bool> decryptAndExport(
+    VideoItem video, {
+    CryptoProgressController? controller,
+  }) async {
     final videoId = video.id;
     _setProcessingState(videoId, '正在解密...');
 
@@ -155,6 +177,7 @@ class VideoListProvider extends ChangeNotifier {
         video.encPath,
         exportPath,
         onProgress: (progress) {
+          controller?.updateProgress(progress);
           _setProcessingState(videoId, '解密中 ${(progress * 100).toStringAsFixed(0)}%');
         },
       );

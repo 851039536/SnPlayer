@@ -48,7 +48,7 @@ utils/            # 纯函数工具（文件工具、加密工具、颜色工具
 - **FolderProvider** — 文件夹 CRUD、当前选中文件夹、筛选逻辑
 - **VideoListProvider** — 视频列表 CRUD、加密/解密流程、缩略图加载队列、存储统计、缓存清理
 
-首页为 `VideoListScreen`，支持 Material 3 双主题（light/dark），跟随系统 `ThemeMode.system`。
+首页为 `VideoListScreen`，支持 Material 3 双主题（light/dark），跟随系统 `ThemeMode.system`。主列表页已按职责拆分：卡片操作分发在 `screens/video_actions_handler.dart`，第三方播放三级策略在 `screens/external_play_handler.dart`，详情弹窗与确认/输入对话框分别在 `widgets/video_detail_sheet.dart`、`widgets/video_dialogs.dart`。
 
 ### 加密核心（services/crypto_service.dart）
 
@@ -85,9 +85,19 @@ offset 64+:    AES-256-CTR 密文
    - **首块 64KB 快速返回**：seek 后首字节延迟从 ~100ms 降至 ~15ms，后续块恢复 512KB 提升吞吐
    - **内存 LRU 块缓存**（128 块 = 64MB）：缓存命中时主线程直接返回，不经过 Worker。仅缓存 512KB 对齐的整块，避免索引错位导致 `Invalid NAL length` 解码错误
    - **连接断开处理**：提前终止时 `detachSocket().destroy()` 发 RST 重置 TCP，让播放器明确收到中断信号并发起新 Range 请求
-3. **全量解密回退** — 前两种方式不可用时，解密整个文件到临时目录再播放（全量临时文件在 dispose 时自动删除）
+3. **全量解密回退** — 前两种方式不可用时，解密整个文件到临时目录再播放（全量临时文件在 dispose 时自动删除）；解密期间播放页 loading 视图显示线性进度条 +「正在解密 xx%」
 
 缓存策略：`PlaybackCacheManager` 缓存最多保留 3 天，LRU 淘汰上限 500MB，每次启动自动清理过期缓存。用户可通过 `VideoListProvider.clearAllCache()` 手动清空全部缓存（播放 + 缩略图）。
+
+### 加解密进度 UI
+
+所有前台加解密操作均有可见进度（底层 Isolate 进度经 `onProgress` 回调逐层上报）：
+
+- **CryptoProgressDialog / CryptoProgressController**（`widgets/crypto_progress_dialog.dart`）— 统一的模态进度对话框：标题 + 文件名 + 线性进度条 + 百分比，批量场景显示「第 n/总数 个」；controller 按整数百分比节流 notifyListeners，避免高频重建；对话框用 PopScope 屏蔽返回键，由调用方在 finally 中关闭
+- **加密导入** — `VideoListProvider.pickVideoFiles()` 选文件后由列表页调 `encryptVideos()` 批量加密，全程模态进度对话框（文件名/第 n 个/百分比），完成后 SnackBar 汇总成功/失败数；加密期间视频尚未入列表，不写 processingState
+- **解密导出** — 进度双通道：模态进度对话框 + 视频卡片角标徽章（processingState 文本）
+- **第三方播放全量解密降级** — `ExternalPlayHandler` 内使用同一进度对话框（流式代理启动阶段为不定进度态，降级解密时显示百分比）
+- **应用内播放全量解密回退** — 播放页 loading 视图内显示线性进度条，setState 同样按整数百分比节流
 
 ### 存储与文件管理
 
