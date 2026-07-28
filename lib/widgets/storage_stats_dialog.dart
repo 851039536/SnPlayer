@@ -1,8 +1,11 @@
+// lib/widgets/storage_stats_dialog.dart — 存储统计弹窗（永久数据/可清理缓存分组 + 占用与可清理双总计）
+
 import 'package:flutter/material.dart';
 
 import '../utils/file_utils.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
+import '../theme/app_sizes.dart';
 import '../theme/app_colors.dart';
 
 /// 存储统计弹窗
@@ -28,6 +31,11 @@ class StorageStatsDialog extends StatelessWidget {
     final tencSize = stats['tencSize'] as int? ?? 0;
     final cacheCount = stats['cacheCount'] as int? ?? 0;
     final cacheSize = stats['cacheSize'] as int? ?? 0;
+    final thumbCacheCount = stats['thumbCacheCount'] as int? ?? 0;
+    final thumbCacheSize = stats['thumbCacheSize'] as int? ?? 0;
+
+    final totalSize = encSize + tencSize + cacheSize + thumbCacheSize;
+    final clearableSize = cacheSize + thumbCacheSize;
 
     return AlertDialog(
       backgroundColor: colorScheme.surfaceContainerHigh,
@@ -35,14 +43,18 @@ class StorageStatsDialog extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.xxl)),
       title: Row(
         children: [
-          Icon(Icons.storage_rounded, color: colorScheme.primary),
-          const SizedBox(width: 10),
+          Icon(Icons.storage_rounded,
+            color: colorScheme.primary, size: AppSizes.iconSm),
+          const SizedBox(width: AppSpacing.spacing2),
           const Text('存储统计'),
         ],
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 永久数据（删除需重新生成，不可通过"清理缓存"释放）
+          _buildSectionLabel(context, '永久数据'),
           _buildStatRow(
             context,
             icon: Icons.videocam_rounded,
@@ -51,44 +63,45 @@ class StorageStatsDialog extends StatelessWidget {
             size: encSize,
             color: colorScheme.primary,
           ),
-          const SizedBox(height: AppSpacing.spacing4),
+          const SizedBox(height: AppSpacing.spacing3),
           _buildStatRow(
             context,
             icon: Icons.image_rounded,
-            label: '缩略图',
+            label: '缩略图源',
             count: tencCount,
             size: tencSize,
             color: AppColors.success,
           ),
+
           const SizedBox(height: AppSpacing.spacing4),
+
+          // 可清理缓存（点击"清理缓存"即可释放）
+          _buildSectionLabel(context, '可清理缓存'),
           _buildStatRow(
             context,
-            icon: Icons.cached_rounded,
-            label: '缓存文件',
+            icon: Icons.play_circle_outline_rounded,
+            label: '播放缓存',
             count: cacheCount,
             size: cacheSize,
             color: AppColors.warning,
           ),
-          const SizedBox(height: AppSpacing.spacing5),
-          Divider(color: colorScheme.outlineVariant),
           const SizedBox(height: AppSpacing.spacing3),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('总计',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              Text(
-                FileUtils.formatFileSize(encSize + tencSize + cacheSize),
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: colorScheme.primary,
-                ),
-              ),
-            ],
+          _buildStatRow(
+            context,
+            icon: Icons.cached_rounded,
+            label: '缩略图缓存',
+            count: thumbCacheCount,
+            size: thumbCacheSize,
+            color: AppColors.brand,
           ),
+
+          const SizedBox(height: AppSpacing.spacing3),
+          Divider(color: colorScheme.outlineVariant, height: AppSpacing.spacing5),
+          _buildTotalRow(context, '占用总量',
+            FileUtils.formatFileSize(totalSize), colorScheme.primary),
+          const SizedBox(height: AppSpacing.spacing2),
+          _buildTotalRow(context, '其中可清理',
+            FileUtils.formatFileSize(clearableSize), AppColors.warning),
         ],
       ),
       actions: [
@@ -97,6 +110,20 @@ class StorageStatsDialog extends StatelessWidget {
           child: const Text('关闭'),
         ),
       ],
+    );
+  }
+
+  /// 分组标题
+  Widget _buildSectionLabel(BuildContext context, String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.spacing2),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
   }
 
@@ -113,23 +140,25 @@ class StorageStatsDialog extends StatelessWidget {
     return Row(
       children: [
         Container(
-          width: 36,
-          height: 36,
+          width: AppSizes.iconButtonXs,
+          height: AppSizes.iconButtonXs,
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(AppRadius.md),
           ),
-          child: Icon(icon, color: color, size: 20),
+          child: Icon(icon, color: color, size: AppSizes.iconXs),
         ),
-        const SizedBox(width: AppSpacing.spacing4),
+        const SizedBox(width: AppSpacing.spacing3),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
               Text(label,
-                style: Theme.of(context).textTheme.bodyMedium,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurface,
+                ),
               ),
-              Text('$count 个文件',
+              const SizedBox(width: AppSpacing.spacing2),
+              Text('$count 个',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -142,6 +171,27 @@ class StorageStatsDialog extends StatelessWidget {
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.w500,
             color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 总计行（占用总量 / 可清理）
+  Widget _buildTotalRow(
+    BuildContext context, String label, String value, Color valueColor) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        Text(value,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: valueColor,
           ),
         ),
       ],

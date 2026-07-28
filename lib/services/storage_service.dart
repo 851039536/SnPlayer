@@ -321,9 +321,16 @@ class StorageService {
   }
 
   /// 获取存储统计信息
+  ///
+  /// 区分永久数据与可清理缓存：
+  /// - encSize/tencSize：加密视频与加密缩略图源（LockVideo 目录，永久数据，删除需重新生成）
+  /// - cacheSize：播放磁盘缓存（play_cache 目录，可清理）
+  /// - thumbCacheSize：缩略图解密磁盘缓存（thumb_cache 目录，可清理）
+  /// cacheSize + thumbCacheSize 与 clearAllCache 的清理口径一致。
   static Future<Map<String, dynamic>> getStorageStats() async {
     final lockDir = await PathProviderService.getLockVideoDir();
     final cacheDir = await PathProviderService.getCacheDir();
+    final thumbCacheDir = await PathProviderService.getThumbCacheDir();
     final dir = Directory(lockDir);
 
     int encCount = 0;
@@ -346,28 +353,38 @@ class StorageService {
       }
     }
 
-    // 缓存统计
-    int cacheCount = 0;
-    int cacheSize = 0;
-    final cacheDirObj = Directory(cacheDir);
-    if (await cacheDirObj.exists()) {
-      await for (final entity in cacheDirObj.list()) {
-        if (entity is File) {
-          final stat = await entity.stat();
-          cacheCount++;
-          cacheSize += stat.size;
-        }
-      }
-    }
+    // 播放缓存统计（play_cache）
+    final playCache = await _dirFileStats(cacheDir);
+    // 缩略图磁盘缓存统计（thumb_cache）——与 clearAllCache 清理范围一致
+    final thumbCache = await _dirFileStats(thumbCacheDir);
 
     return {
       'encCount': encCount,
       'encSize': encSize,
       'tencCount': tencCount,
       'tencSize': tencSize,
-      'cacheCount': cacheCount,
-      'cacheSize': cacheSize,
+      'cacheCount': playCache.count,
+      'cacheSize': playCache.size,
+      'thumbCacheCount': thumbCache.count,
+      'thumbCacheSize': thumbCache.size,
     };
+  }
+
+  /// 统计目录顶层文件数量与总大小（非递归）
+  static Future<({int count, int size})> _dirFileStats(String dirPath) async {
+    final dir = Directory(dirPath);
+    int count = 0;
+    int size = 0;
+    if (await dir.exists()) {
+      await for (final entity in dir.list()) {
+        if (entity is File) {
+          final stat = await entity.stat();
+          count++;
+          size += stat.size;
+        }
+      }
+    }
+    return (count: count, size: size);
   }
 
   /// 清理孤儿缩略图（没有对应 .enc 的 .tenc 文件）
