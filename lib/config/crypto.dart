@@ -35,6 +35,12 @@ const int pbkdf2Iterations = 10;
 /// 从 512KB 提升至 4MB，减少系统调用次数约 87.5%，提升 I/O 吞吐
 const int bufferSize = 4 * 1024 * 1024;
 
+/// Isolate 加解密写盘 flush 间隔（64MB）
+///
+/// IOSink.add 不阻塞，写盘慢于加解密时数据会在内存中排队。
+/// 每累计写入此字节数后 flush 一次，限制未落盘数据的内存占用上限。
+const int isolateFlushIntervalBytes = 64 * 1024 * 1024;
+
 /// PBKDF2 Salt 在文件头中的偏移量
 const int saltOffset = 16;
 
