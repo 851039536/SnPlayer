@@ -26,6 +26,9 @@ class AppSizes {
   /// 40px — 占位图标/大状态图标
   static const double iconXxl = 40.0;
 
+  /// 28px — 紧凑图标按钮容器（弹窗菜单项图标底板）
+  static const double iconButtonXs = 28.0;
+
   /// 36px — 小图标按钮容器
   static const double iconButtonSm = 36.0;
 

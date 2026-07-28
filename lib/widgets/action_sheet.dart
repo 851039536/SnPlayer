@@ -1,3 +1,5 @@
+// lib/widgets/action_sheet.dart — 底部操作菜单组件（视频卡片点击弹窗，紧凑布局 + 统一字体）
+
 import 'package:flutter/material.dart';
 
 import '../theme/app_spacing.dart';
@@ -77,16 +79,18 @@ class ActionSheet extends StatelessWidget {
                 ),
               ),
 
-              // 标题
+              // 标题（字号与菜单项一致，仅以加粗区分层级）
               if (title != null) ...[
                 Padding(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.spacing6, vertical: AppSpacing.spacing2),
+                    horizontal: AppSpacing.spacing5, vertical: AppSpacing.spacing1),
                   child: Text(
                     title!,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const Divider(height: 1),
@@ -105,7 +109,7 @@ class ActionSheet extends StatelessWidget {
                     onPressed: () => Navigator.pop(context),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
-                        vertical: AppSpacing.spacing3),
+                        vertical: AppSpacing.spacing2),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadius.lg),
                       ),
@@ -131,12 +135,13 @@ class ActionSheet extends StatelessWidget {
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.spacing5, vertical: AppSpacing.spacing3),
+          horizontal: AppSpacing.spacing4, vertical: AppSpacing.spacing2),
         child: Row(
           children: [
+            // 图标底板保留各项语义色，文字统一 onSurface（字体大小颜色一致）
             Container(
-              width: AppSizes.iconButtonSm,
-              height: AppSizes.iconButtonSm,
+              width: AppSizes.iconButtonXs,
+              height: AppSizes.iconButtonXs,
               decoration: BoxDecoration(
                 color: (item.color ?? colorScheme.primary).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(AppRadius.md),
@@ -144,14 +149,14 @@ class ActionSheet extends StatelessWidget {
               child: Icon(
                 item.icon,
                 color: item.color ?? colorScheme.primary,
-                size: AppSizes.iconSm,
+                size: AppSizes.iconXs,
               ),
             ),
-            const SizedBox(width: AppSpacing.spacing4),
+            const SizedBox(width: AppSpacing.spacing3),
             Text(
               item.label,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: item.color,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurface,
               ),
             ),
           ],
