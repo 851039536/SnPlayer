@@ -1,3 +1,5 @@
+// lib/services/storage_service.dart — 文件存储管理（目录/扫描/命名/移动重命名/文件夹元数据/存储统计）
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -61,7 +63,7 @@ class StorageService {
     try {
       final encPath = encFile.path;
       final fileName = p.basename(encPath);
-      final thumbPath = encPath.replaceAll('.enc', '.tenc');
+      final thumbPath = buildThumbPath(encPath);
 
       // 解析显示名称和时间戳
       final displayName = _parseDisplayName(fileName);
@@ -76,7 +78,7 @@ class StorageService {
       final stat = await encFile.stat();
 
       return VideoItem(
-        id: fileName.replaceAll('.enc', ''),
+        id: _replaceSuffix(fileName, '.enc', ''),
         encPath: encPath,
         thumbPath: thumbPath,
         displayName: displayName,
@@ -93,8 +95,19 @@ class StorageService {
   /// 从文件名解析显示名称
   /// 格式: 原始名称_yyyyMMdd.enc → 原始名称
   static String _parseDisplayName(String fileName) {
-    final baseName = fileName.replaceAll('.enc', '');
+    final baseName = _replaceSuffix(fileName, '.enc', '');
     return baseName.replaceFirst(RegExp(r'_\d{8}$'), '');
+  }
+
+  /// 仅替换路径结尾的后缀
+  ///
+  /// replaceAll 会误替换路径中间的同名子串
+  /// （如 my.encode_x.enc 会被替换成两处），必须限定结尾匹配。
+  static String _replaceSuffix(String path, String from, String to) {
+    if (!path.endsWith(from)) {
+      return path;
+    }
+    return path.substring(0, path.length - from.length) + to;
   }
 
   /// 生成加密文件命名
@@ -122,7 +135,7 @@ class StorageService {
 
   /// 构建加密缩略图的完整路径
   static String buildThumbPath(String encPath) {
-    return encPath.replaceAll('.enc', '.tenc');
+    return _replaceSuffix(encPath, '.enc', '.tenc');
   }
 
   /// 移动视频到目标文件夹
@@ -141,6 +154,16 @@ class StorageService {
 
       final newEncPath = p.join(targetDir, encFileName);
       final newThumbPath = p.join(targetDir, thumbFileName);
+
+      // 目标与源相同（移回原文件夹）视为成功，无需移动
+      if (newEncPath == video.encPath) {
+        return true;
+      }
+      // 目标已存在则拒绝，防止 rename 静默覆盖导致数据丢失
+      if (await File(newEncPath).exists()) {
+        debugPrint('[SnPlayer] StorageService.moveVideo: 目标已存在 $newEncPath');
+        return false;
+      }
 
       // 移动加密视频
       await File(video.encPath).rename(newEncPath);
@@ -167,7 +190,17 @@ class StorageService {
 
       final dirPath = p.dirname(video.encPath);
       final newEncPath = p.join(dirPath, newEncName);
-      final newThumbPath = newEncPath.replaceAll('.enc', '.tenc');
+      final newThumbPath = _replaceSuffix(newEncPath, '.enc', '.tenc');
+
+      // 名称未变化视为成功
+      if (newEncPath == video.encPath) {
+        return true;
+      }
+      // 目标已存在则拒绝，防止 rename 静默覆盖导致数据丢失
+      if (await File(newEncPath).exists()) {
+        debugPrint('[SnPlayer] StorageService.renameVideo: 目标已存在 $newEncPath');
+        return false;
+      }
 
       await File(video.encPath).rename(newEncPath);
       if (await File(video.thumbPath).exists()) {
@@ -184,6 +217,9 @@ class StorageService {
   // --- 文件夹元数据管理 ---
 
   /// 读取 .folders.json
+  ///
+  /// 文件不存在返回空列表；解析失败（损坏）时先备份为 .folders.json.bak
+  /// 再返回空列表，避免后续 load-改-存流程用空数据覆盖掉可恢复的原始内容。
   static Future<List<VideoFolder>> loadFolders() async {
     final lockDir = await PathProviderService.getLockVideoDir();
     final file = File(p.join(lockDir, foldersJsonFileName));
@@ -197,18 +233,28 @@ class StorageService {
       final List<dynamic> jsonList = json.decode(content);
       return jsonList.map((j) => VideoFolder.fromJson(j)).toList();
     } catch (e) {
-      debugPrint('[SnPlayer] StorageService.loadFolders: $e');
+      debugPrint('[SnPlayer] StorageService.loadFolders: 元数据损坏，备份后重置: $e');
+      // 备份损坏文件供人工恢复，避免被后续保存静默覆盖
+      try {
+        await file.rename('${file.path}.bak');
+      } catch (e2) {
+        debugPrint('[SnPlayer] StorageService.loadFolders: 备份失败: $e2');
+      }
       return [];
     }
   }
 
   /// 保存 .folders.json
+  ///
+  /// 写临时文件后 rename 原子替换，防写入中途崩溃损坏元数据。
   static Future<bool> saveFolders(List<VideoFolder> folders) async {
     try {
       final lockDir = await PathProviderService.getLockVideoDir();
       final file = File(p.join(lockDir, foldersJsonFileName));
+      final tmpFile = File('${file.path}.tmp');
       final jsonList = folders.map((f) => f.toJson()).toList();
-      await file.writeAsString(json.encode(jsonList));
+      await tmpFile.writeAsString(json.encode(jsonList), flush: true);
+      await tmpFile.rename(file.path);
       return true;
     } catch (e) {
       debugPrint('[SnPlayer] StorageService.saveFolders: $e');
@@ -335,7 +381,7 @@ class StorageService {
     int deleted = 0;
     await for (final entity in dir.list(recursive: true)) {
       if (entity is File && entity.path.endsWith('.tenc')) {
-        final encPath = entity.path.replaceAll('.tenc', '.enc');
+        final encPath = _replaceSuffix(entity.path, '.tenc', '.enc');
         if (!await File(encPath).exists()) {
           await entity.delete();
           deleted++;

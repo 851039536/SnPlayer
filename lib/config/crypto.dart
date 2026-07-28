@@ -1,5 +1,4 @@
-/// 加密常量配置
-/// 所有加密参数与 MewTool 原版保持一致，确保 .enc 文件格式兼容
+// lib/config/crypto.dart — 加密常量配置（所有加密参数与 MewTool 原版保持一致，确保 .enc 文件格式兼容）
 
 /// 默认加密密码（UTF-8 编码后用于 PBKDF2 密钥派生）
 const String defaultPassword = 'SN-Video-Editor-2026-Default-Key!';
@@ -71,11 +70,16 @@ const int thumbnailBatchSize = 8;
 /// 播放临时文件自动删除延迟（毫秒）
 const int playCacheDeleteDelayMs = 30000;
 
-/// 安全删除零覆写块大小（4KB）
-const int safeDeleteBlockSize = 4096;
+/// 安全删除零覆写块大小（1MB）
+///
+/// 过小的块（如 4KB）会使 1GB 文件需要 26 万次异步写往返，耗时数分钟。
+const int safeDeleteOverwriteBlockSize = 1024 * 1024;
 
 /// 安全删除重试间隔序列（毫秒）
 const List<int> safeDeleteRetryDelays = [3000, 6000, 12000, 24000, 30000];
+
+/// 快速删除重试间隔序列（毫秒，用于非敏感的播放缓存临时文件）
+const List<int> fastDeleteRetryDelays = [100, 500, 1000];
 
 // ═══════════════════════════════════════════════════════════
 // 并行解密配置
@@ -128,23 +132,15 @@ const String foldersJsonFileName = '.folders.json';
 // 流式解密配置
 // ═══════════════════════════════════════════════════════════
 
-/// 流式解密 HTTP 响应处理块大小（256KB）
+/// 流式解密块大小（512KB）
 ///
-/// 每处理此大小的数据后让出事件循环（await Future.delayed(Duration.zero)），
-/// 防止长时间同步解密阻塞 UI 线程。256KB 块约 5-25ms，用户无感知。
-const int streamingChunkSize = 256 * 1024;
-
-/// 内存块缓存粒度（512KB，由 StreamingDecryptProxy._decryptBlockSize 决定）
-///
-/// 解密后的数据按此粒度缓存，seek 回退或重复请求时直接命中内存。
-/// 注意：实际缓存粒度已改为 512KB（StreamingDecryptProxy 内部常量），
-/// 此常量当前仅作为文档参考，未被代码使用。
-const int streamingBlockSize = 512 * 1024;
+/// worker Isolate 解密与主线程内存 LRU 块缓存共用此粒度。
+/// 512KB 平衡了 Isolate 间数据传递开销和系统调用次数。
+const int streamingDecryptBlockSize = 512 * 1024;
 
 /// 内存块缓存上限（128 块 × 512KB = 64MB）
 ///
 /// LRU 策略淘汰最久未访问的块，控制内存占用。
-/// 块粒度随 _decryptBlockSize 调整为 512KB，块数相应增加以维持总量。
 const int streamingMaxCacheBlocks = 128;
 
 /// 磁盘播放缓存总上限（500MB）

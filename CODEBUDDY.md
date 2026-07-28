@@ -68,10 +68,11 @@ offset 64+:    AES-256-CTR 密文
 
 关键设计：
 - `CryptoService` 使用 **Isolate** 在后台线程执行加解密，避免阻塞 UI。
-- 加密/解密均支持**多 Isolate 并行分块**，`encryptFile`/`decryptFile` 会根据文件大小自动选择路径：≥64MB 走并行（2-6 路），否则串行。并行路径曾存在文件头版本字节（偏移 32）被截断为 0x00 的 bug，根因是 `_writeBatchToOutput` 使用 `FileMode.write`（等同 `O_TRUNC`）重复打开输出文件，清空了已写入的 64 字节文件头。已于 2026-07-02 修复：改为在整个并行流程中复用同一 `RandomAccessFile` 句柄，由 `try/finally` 保证关闭。并行失败时会清理临时 chunk 文件和损坏的输出文件，进度回调单调递增避免多 chunk 交错跳变。
+- 加密/解密均支持**多 Isolate 并行分块**，`encryptFile`/`decryptFile` 会根据文件大小自动选择路径：≥64MB 走并行（2-6 路），否则串行。并行分块调度器已拆分至 `parallel_crypto_scheduler.dart`（加/解密共用同一参数化调度流程，异步批量合并 + 复制总量校验）。并行路径曾存在文件头版本字节（偏移 32）被截断为 0x00 的 bug，根因是 `_writeBatchToOutput` 使用 `FileMode.write`（等同 `O_TRUNC`）重复打开输出文件，清空了已写入的 64 字节文件头。已于 2026-07-02 修复：改为在整个并行流程中复用同一 `RandomAccessFile` 句柄，由 `try/finally` 保证关闭。并行失败时会清理临时 chunk 文件和损坏的输出文件，进度回调单调递增避免多 chunk 交错跳变。
+- 解密到播放缓存（`decryptToTemp`）先写 `.decrypting.tmp` 再原子 rename 到最终名，防止预分配/半写入的文件被 `PlaybackCacheManager` 误判为有效缓存（TOCTOU）。
 - 密钥派生结果使用 LRU 缓存（容量 100），避免重复 PBKDF2 计算。
 - `crypto_isolate.dart` 是 Isolate Worker，在独立线程中执行 encrypt/decrypt 命令，采用双缓冲流水线（4MB 缓冲区）。
-- `utils/crypto_utils.dart` 是纯 Dart 的密码学工具函数，不依赖 Flutter/Isolate，可跨平台使用。
+- `utils/crypto_utils.dart` 是纯 Dart 的密码学工具函数（含 64 字节文件头的统一解析/构建 `parseEncHeader`/`buildEncHeader`），不依赖 Flutter/Isolate，可跨平台使用。
 
 ### 视频播放策略（三段式降级）
 
@@ -79,7 +80,7 @@ offset 64+:    AES-256-CTR 密文
 
 1. **磁盘缓存命中** — `PlaybackCacheManager` 校验缓存完整性（大小匹配 + 文件头非零验证），有效则直接播放本地文件
 2. **流式解密代理** — 启动本地 HTTP 代理服务器（`StreamingDecryptProxy`），利用 AES-CTR 随机访问特性 + 原生播放器 HTTP Range 请求实现按需解密：
-   - **长驻 Worker Isolate**：解密在独立 Isolate 执行，主线程零同步阻塞。每个请求分配唯一 `requestId`，支持并发 Range 请求（视频轨+音频轨）独立取消/完成，互不干扰
+   - **长驻 Worker Isolate**（`streaming_decrypt_worker.dart`）：解密在独立 Isolate 执行，主线程零同步阻塞。每个请求分配唯一 `requestId`，支持并发 Range 请求（视频轨+音频轨）独立取消/完成，互不干扰；文件截断/EOF 提前到来时上报 error 而非静默短写
    - **ack 窗口流控**：Worker 每发 4 块（~2MB）等待主线程 ack，防止超前解密导致内存积压
    - **首块 64KB 快速返回**：seek 后首字节延迟从 ~100ms 降至 ~15ms，后续块恢复 512KB 提升吞吐
    - **内存 LRU 块缓存**（128 块 = 64MB）：缓存命中时主线程直接返回，不经过 Worker。仅缓存 512KB 对齐的整块，避免索引错位导致 `Invalid NAL length` 解码错误
@@ -94,7 +95,7 @@ offset 64+:    AES-256-CTR 密文
 - **`PlaybackCacheManager`** — 播放磁盘缓存管理：缓存完整性校验（文件大小比对 + 64 字节文件头非零验证，拦截全零脏缓存）、过期清理（3 天）、LRU 总量淘汰（上限 500MB）
 - **`ThumbnailService`** — 生成缩略图（.tenc 加密格式），提取视频首帧，GIF 格式检测，磁盘缓存管理。后台通过部分解密（前 30MB）从加密视频生成缩略图，避免全量解密开销
 - **`PathProviderService`** — 统一路径管理，提供 LockVideo / UnLockVideo / Cache / ThumbCache 四个目录的路径
-- **`SafeDeleteHelper`** — 安全删除：零覆写 + 指数退避重试（3s→6s→12s→24s→30s），另有快速删除模式（3 次简单重试）用于播放缓存临时文件
+- **`SafeDeleteHelper`** — 安全删除：零覆写（1MB 块，append 模式打开避免 O_TRUNC 截断导致覆写失效）+ 指数退避重试（3s→6s→12s→24s→30s），另有快速删除模式（3 次简单重试）用于播放缓存临时文件
 
 ### Android 原生通信
 

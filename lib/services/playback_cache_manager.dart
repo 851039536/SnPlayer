@@ -1,5 +1,6 @@
+// lib/services/playback_cache_manager.dart — 播放磁盘缓存管理（完整性校验/路径生成/过期与 LRU 清理）
+
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -105,7 +106,7 @@ class PlaybackCacheManager {
 
     int deleted = 0;
     final now = DateTime.now();
-    final maxAge = const Duration(days: playCacheExpireDays);
+    const maxAge = Duration(days: playCacheExpireDays);
 
     await for (final entity in dir.list()) {
       if (entity is! File) {

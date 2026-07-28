@@ -1,3 +1,5 @@
+// lib/services/crypto_service.dart — AES-256-CTR 加解密核心服务（串行/并行分流、密钥缓存、内存数据加解密）
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -10,20 +12,30 @@ import 'package:pointycastle/api.dart';
 import '../config/crypto.dart';
 import '../utils/crypto_utils.dart';
 import 'crypto_isolate.dart';
+import 'parallel_crypto_scheduler.dart';
+import 'playback_cache_manager.dart';
 
 /// AES-256-CTR 加密/解密核心服务
 ///
 /// 兼容 MewTool .enc 文件格式（64 字节文件头：IV + Salt + 保留字段）
 /// 采用 PBKDF2-HMAC-SHA256 密钥派生 + AES-256-CTR 流式加密
 /// 4MB 双缓冲流水线，I/O 与 CPU 计算重叠
-/// 大文件（≥64MB）自动启用 2-6 路并行分块加解密
+/// 大文件（≥64MB）自动启用 2-6 路并行分块加解密（ParallelCryptoScheduler）
 class CryptoService {
+  /// Isolate 最大运行时间（5 分钟），超时后强制终止
+  static const Duration _isolateTimeout = Duration(minutes: 5);
+
+  /// 部分解密超时（30 秒），30MB 部分解密通常 1-3 秒内完成
+  static const Duration _partialTimeout = Duration(seconds: 30);
+
   /// 从固定密码和指定盐值派生 32 字节 AES 密钥
   /// 密码固定，以 salt 的 base64 编码作为缓存 key，避免重复的 10 次迭代开销
   static Uint8List deriveKey(Uint8List passwordBytes, Uint8List salt) {
     final cacheKey = base64.encode(salt);
-    final cached = _keyCache[cacheKey];
+    // 命中时 remove + 重插到末尾，实现真 LRU（仅插入序淘汰是 FIFO）
+    final cached = _keyCache.remove(cacheKey);
     if (cached != null) {
+      _keyCache[cacheKey] = cached;
       return cached;
     }
 
@@ -47,8 +59,8 @@ class CryptoService {
   }) async {
     final fileSize = await File(inputPath).length();
     if (fileSize >= parallelDecryptMinFileSize) {
-      await encryptFileParallel(inputPath, outputPath,
-          onProgress: onProgress, fileSize: fileSize);
+      await _encryptParallel(inputPath, outputPath,
+          fileSize: fileSize, onProgress: onProgress);
     } else {
       await _runInIsolate(
         command: 'encrypt',
@@ -57,23 +69,6 @@ class CryptoService {
         onProgress: onProgress,
       );
     }
-  }
-
-  /// 并行分块加密文件
-  ///
-  /// 生成随机 IV/Salt，派生密钥，写入文件头，然后分块并行 CTR 加密。
-  static Future<void> encryptFileParallel(
-    String inputPath,
-    String outputPath, {
-    void Function(double)? onProgress,
-    int? fileSize,
-  }) async {
-    await _runParallelEncrypt(
-      inputPath: inputPath,
-      outputPath: outputPath,
-      onProgress: onProgress,
-      fileSize: fileSize,
-    );
   }
 
   /// 解密文件（自动根据文件大小选择串行/并行路径）
@@ -91,7 +86,7 @@ class CryptoService {
   }) async {
     final fileSize = await File(inputPath).length();
     if (fileSize >= parallelDecryptMinFileSize) {
-      await decryptFileParallel(inputPath, outputPath, onProgress: onProgress);
+      await _decryptParallel(inputPath, outputPath, onProgress: onProgress);
     } else {
       await _runInIsolate(
         command: 'decrypt',
@@ -102,11 +97,184 @@ class CryptoService {
     }
   }
 
-  /// Isolate 最大运行时间（5 分钟），超时后强制终止
-  static const Duration _isolateTimeout = Duration(minutes: 5);
+  /// 解密到播放缓存文件，返回缓存文件路径
+  ///
+  /// 命名规则由 [PlaybackCacheManager.getCacheFilePath] 统一维护，缓存可直接命中。
+  static Future<String> decryptToTemp(
+    String encPath,
+    String cacheDir, {
+    void Function(double)? onProgress,
+  }) async {
+    final tempPath = PlaybackCacheManager.getCacheFilePath(encPath, cacheDir);
 
-  /// 部分解密超时（30 秒），30MB 部分解密通常 1-3 秒内完成
-  static const Duration _partialTimeout = Duration(seconds: 30);
+    // 确保缓存目录存在
+    await Directory(cacheDir).create(recursive: true);
+
+    // 先解密到 .decrypting.tmp，完成后原子 rename 到最终名：
+    // 直接写最终名时，预分配/半写入的文件大小和头部内容都会通过
+    // PlaybackCacheManager 的缓存校验，半成品会被当作有效缓存播放（TOCTOU）
+    final decryptingPath = '$tempPath.decrypting.tmp';
+    try {
+      await decryptFile(encPath, decryptingPath, onProgress: onProgress);
+      await File(decryptingPath).rename(tempPath);
+    } catch (e) {
+      // 失败只清理自己的 .tmp，不触碰可能存在的有效缓存
+      try {
+        await File(decryptingPath).delete();
+      } catch (_) {
+        // 忽略：临时文件可能未创建
+      }
+      rethrow;
+    }
+
+    return tempPath;
+  }
+
+  /// 部分解密到临时文件（仅解密用于缩略图提取的前 N MB）
+  ///
+  /// 临时文件命名 `thumb_partial_{videoId}.mp4`，与播放缓存 `play_*.mp4` 隔离。
+  /// [videoId] 用于生成唯一临时文件名。
+  /// [maxBytes] 最大解密字节数，默认 [partialDecryptMaxBytes]（30MB）。
+  static Future<String> decryptToTempPartial(
+    String encPath,
+    String cacheDir,
+    String videoId, {
+    int maxBytes = partialDecryptMaxBytes,
+  }) async {
+    final tempPath = p.join(cacheDir, 'thumb_partial_$videoId.mp4');
+
+    // 确保缓存目录存在
+    await Directory(cacheDir).create(recursive: true);
+
+    await _spawnAndManageIsolate(
+      message: {
+        'command': 'decrypt_partial',
+        'inputPath': encPath,
+        'outputPath': tempPath,
+        'password': defaultPassword,
+        'maxBytes': maxBytes,
+      },
+      timeout: _partialTimeout,
+    );
+    return tempPath;
+  }
+
+  /// 读取加密文件元信息（IV + 派生密钥 + 解密后大小）
+  ///
+  /// 供 [StreamingDecryptProxy] 初始化使用，一次性读取文件头并派生密钥。
+  /// 密钥派生走 [deriveKey] 缓存，相同 salt 的重复调用 O(1)。
+  static Future<EncryptedFileInfo> getEncryptedFileInfo(String encPath) async {
+    final raf = await File(encPath).open(mode: FileMode.read);
+    final header = Uint8List(headerSize);
+    int headerBytesRead;
+    int encFileSize;
+    try {
+      headerBytesRead = await raf.readInto(header, 0, headerSize);
+      encFileSize = await raf.length();
+    } finally {
+      await raf.close();
+    }
+
+    // 解析并校验文件头（长度 + 版本），获取 IV/Salt
+    final headerInfo = CryptoUtils.parseEncHeader(header, headerBytesRead);
+
+    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
+    final key = deriveKey(passwordBytes, headerInfo.salt);
+
+    return EncryptedFileInfo(
+      iv: Uint8List.fromList(headerInfo.iv),
+      key: key,
+      decryptedSize: encFileSize - headerSize,
+    );
+  }
+
+  /// 加密数据块（用于缩略图等内存数据）
+  static Future<Uint8List> encryptBytes(Uint8List data) async {
+    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
+    final iv = CryptoUtils.generateRandomBytes(ivLength);
+    final salt = CryptoUtils.generateRandomBytes(saltLength);
+
+    final key = deriveKey(passwordBytes, salt);
+    final cipher = CryptoUtils.createCtrCipher(key, iv);
+
+    final encrypted = Uint8List(headerSize + data.length);
+    encrypted.setAll(0, CryptoUtils.buildEncHeader(iv, salt));
+
+    _processCtrBlock(cipher, data, encrypted, data.length,
+        dstOffset: headerSize);
+
+    return encrypted;
+  }
+
+  /// 解密数据块（用于缩略图等内存数据）
+  static Uint8List decryptBytes(Uint8List encrypted) {
+    if (encrypted.length < headerSize) {
+      throw const FormatException('加密数据损坏或不完整：不足 64 字节文件头');
+    }
+
+    // 解析并校验文件头（版本），获取 IV/Salt
+    final headerInfo = CryptoUtils.parseEncHeader(
+        Uint8List.sublistView(encrypted, 0, headerSize), headerSize);
+
+    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
+    final key = deriveKey(passwordBytes, headerInfo.salt);
+    final cipher = CryptoUtils.createCtrCipher(key, headerInfo.iv);
+
+    final data = encrypted.sublist(headerSize);
+    final decrypted = Uint8List(data.length);
+
+    _processCtrBlock(cipher, data, decrypted, data.length);
+
+    return decrypted;
+  }
+
+  // --- 并行路径（委托 ParallelCryptoScheduler） ---
+
+  /// 并行分块加密：生成 IV/Salt → 派生密钥 → 构建文件头 → 交给调度器
+  static Future<void> _encryptParallel(
+    String inputPath,
+    String outputPath, {
+    required int fileSize,
+    void Function(double)? onProgress,
+  }) async {
+    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
+    final iv = CryptoUtils.generateRandomBytes(ivLength);
+    final salt = CryptoUtils.generateRandomBytes(saltLength);
+    final key = deriveKey(passwordBytes, salt);
+
+    await ParallelCryptoScheduler.run(
+      isEncrypt: true,
+      inputPath: inputPath,
+      outputPath: outputPath,
+      key: key,
+      iv: iv,
+      header: CryptoUtils.buildEncHeader(iv, salt),
+      dataSize: fileSize,
+      onProgress: onProgress,
+    );
+  }
+
+  /// 并行分块解密：读取文件头派生密钥 → 交给调度器
+  static Future<void> _decryptParallel(
+    String inputPath,
+    String outputPath, {
+    void Function(double)? onProgress,
+  }) async {
+    final info = await getEncryptedFileInfo(inputPath);
+
+    await ParallelCryptoScheduler.run(
+      isEncrypt: false,
+      inputPath: inputPath,
+      outputPath: outputPath,
+      key: info.key,
+      iv: info.iv,
+      header: null,
+      dataSize: info.decryptedSize,
+      onProgress: onProgress,
+    );
+  }
+
+  // --- 单 Isolate 串行路径 ---
 
   /// 在后台 Isolate 中执行加解密，通过 SendPort 接收进度事件
   static Future<void> _runInIsolate({
@@ -124,27 +292,6 @@ class CryptoService {
       },
       timeout: _isolateTimeout,
       onProgress: onProgress,
-    );
-  }
-
-  /// 在后台 Isolate 中执行部分解密，通过 SendPort 接收进度事件
-  ///
-  /// 与 [_runInIsolate] 共享相同的 Isolate 生命周期管理，额外传递 [maxBytes] 参数。
-  static Future<void> _runPartialInIsolate({
-    required String command,
-    required String inputPath,
-    required String outputPath,
-    required int maxBytes,
-  }) async {
-    await _spawnAndManageIsolate(
-      message: {
-        'command': command,
-        'inputPath': inputPath,
-        'outputPath': outputPath,
-        'password': defaultPassword,
-        'maxBytes': maxBytes,
-      },
-      timeout: _partialTimeout,
     );
   }
 
@@ -213,554 +360,7 @@ class CryptoService {
     }
   }
 
-  /// 解密到临时缓存文件，返回临时文件路径
-  ///
-  /// 自动根据文件大小选择解密策略：
-  /// - < 64MB：单 Isolate 串行解密
-  /// - 64MB~256MB：2 Isolate 并行分块解密
-  /// - > 256MB：4 Isolate 并行分块解密
-  static Future<String> decryptToTemp(
-    String encPath,
-    String cacheDir, {
-    void Function(double)? onProgress,
-  }) async {
-    final fileName = p.basenameWithoutExtension(encPath);
-    final tempPath = p.join(cacheDir, 'play_$fileName.mp4');
-
-    // 确保缓存目录存在
-    await Directory(cacheDir).create(recursive: true);
-
-    // 检测文件大小，自动选择串行或并行解密
-    final fileSize = await File(encPath).length();
-    if (fileSize >= parallelDecryptMinFileSize) {
-      await decryptFileParallel(encPath, tempPath, onProgress: onProgress);
-    } else {
-      await decryptFile(encPath, tempPath, onProgress: onProgress);
-    }
-
-    return tempPath;
-  }
-
-  /// 并行分块解密文件
-  ///
-  /// 利用 AES-CTR 的随机访问特性，将密文数据切分为 2~8 块，
-  /// 各块在独立 Isolate 中并行解密，直接写入输出文件对应偏移位置。
-  ///
-  /// 文件大小 < 64MB 不触发并行（由 [decryptToTemp] 控制）。
-  static Future<void> decryptFileParallel(
-    String inputPath,
-    String outputPath, {
-    void Function(double)? onProgress,
-  }) async {
-    await _runParallelDecrypt(
-      inputPath: inputPath,
-      outputPath: outputPath,
-      onProgress: onProgress,
-    );
-  }
-
-  /// 部分解密到临时文件（仅解密用于缩略图提取的前 N MB）
-  ///
-  /// 临时文件命名 `thumb_partial_{videoId}.mp4`，与播放缓存 `play_*.mp4` 隔离。
-  /// [videoId] 用于生成唯一临时文件名。
-  /// [maxBytes] 最大解密字节数，默认 [partialDecryptMaxBytes]（30MB）。
-  static Future<String> decryptToTempPartial(
-    String encPath,
-    String cacheDir,
-    String videoId, {
-    int maxBytes = partialDecryptMaxBytes,
-  }) async {
-    final tempPath = p.join(cacheDir, 'thumb_partial_$videoId.mp4');
-
-    // 确保缓存目录存在
-    await Directory(cacheDir).create(recursive: true);
-
-    await _runPartialInIsolate(
-      command: 'decrypt_partial',
-      inputPath: encPath,
-      outputPath: tempPath,
-      maxBytes: maxBytes,
-    );
-    return tempPath;
-  }
-
-  /// 读取加密文件元信息（IV + Salt + 派生密钥 + 文件大小）
-  ///
-  /// 供 [StreamingDecryptProxy] 初始化使用，一次性读取文件头并派生密钥。
-  /// 密钥派生走 [deriveKey] 缓存，相同 salt 的重复调用 O(1)。
-  static Future<EncryptedFileInfo> getEncryptedFileInfo(String encPath) async {
-    final inputFile = File(encPath);
-    final raf = await inputFile.open(mode: FileMode.read);
-    final header = Uint8List(headerSize);
-    await raf.readInto(header, 0, headerSize);
-    final encFileSize = await raf.length();
-    await raf.close();
-
-    final iv = Uint8List.sublistView(header, 0, ivLength);
-    final salt =
-        Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
-
-    // 校验格式版本号
-    final ver = header[versionOffset];
-    if (ver != versionByte) {
-      throw FormatException(
-        '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
-        '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
-      );
-    }
-
-    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
-    final key = deriveKey(passwordBytes, salt);
-
-    return EncryptedFileInfo(
-      iv: Uint8List.fromList(iv),
-      salt: Uint8List.fromList(salt),
-      key: key,
-      decryptedSize: encFileSize - headerSize,
-      encFileSize: encFileSize,
-    );
-  }
-
-
-  /// 加密数据块（用于缩略图等内存数据）
-  static Future<Uint8List> encryptBytes(Uint8List data) async {
-    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
-    final iv = _generateRandomBytes(ivLength);
-    final salt = _generateRandomBytes(saltLength);
-
-    final key = deriveKey(passwordBytes, salt);
-    final cipher = _createCipher(key, iv);
-
-    final encrypted = Uint8List(headerSize + data.length);
-    encrypted.setAll(0, iv);
-    encrypted.setAll(ivLength, salt);
-    encrypted[versionOffset] = versionByte; // v2 格式版本号
-
-    _processCtrBlock(cipher, data, encrypted, data.length,
-        dstOffset: headerSize);
-
-    return encrypted;
-  }
-
-  /// 解密数据块（用于缩略图等内存数据）
-  static Uint8List decryptBytes(Uint8List encrypted) {
-    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
-
-    final iv = encrypted.sublist(0, ivLength);
-    final salt = encrypted.sublist(saltOffset, saltOffset + saltLength);
-
-    // 校验格式版本号
-    final ver = encrypted[versionOffset];
-    if (ver != versionByte) {
-      throw FormatException(
-        '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
-        '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
-      );
-    }
-
-    final key = deriveKey(passwordBytes, salt);
-    final cipher = _createCipher(key, iv);
-
-    final data = encrypted.sublist(headerSize);
-    final decrypted = Uint8List(data.length);
-
-    _processCtrBlock(cipher, data, decrypted, data.length);
-
-    return decrypted;
-  }
-
-  // --- 并行解密 ---
-
-  /// 并行分块解密核心调度
-  ///
-  /// 1. 读取文件头获取 IV + Salt
-  /// 2. 派生密钥
-  /// 3. 计算分块数和边界（16 字节对齐）
-  /// 4. 预分配输出文件
-  /// 5. 分批 spawn Isolate 到临时文件，主线程按偏移复制到输出
-  static Future<void> _runParallelDecrypt({
-    required String inputPath,
-    required String outputPath,
-    void Function(double)? onProgress,
-  }) async {
-    // 1. 读取文件头获取 IV 和 Salt
-    final inputFile = File(inputPath);
-    final raf = await inputFile.open(mode: FileMode.read);
-    final header = Uint8List(headerSize);
-    await raf.readInto(header, 0, headerSize);
-    final fileSize = await raf.length();
-    await raf.close();
-
-    final iv = Uint8List.sublistView(header, 0, ivLength);
-    final salt = Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
-
-    // 校验格式版本号
-    final ver = header[versionOffset];
-    if (ver != versionByte) {
-      throw FormatException(
-        '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
-        '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
-      );
-    }
-
-    // 2. 派生密钥
-    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
-    final key = deriveKey(passwordBytes, salt);
-    final keyBase64 = base64.encode(key);
-
-    // 3. 计算分块数和每块边界（chunkSize 必须 16 字节对齐）
-    final cipherDataSize = fileSize - headerSize;
-    final isolateCount = _getChunkCount(cipherDataSize);
-    final rawChunkSize = cipherDataSize ~/ isolateCount;
-    final chunkSize = (rawChunkSize ~/ aesBlockSize) * aesBlockSize;
-
-    debugPrint('[SnPlayer] 并行解密: 文件=${fileSize}B, 密文=${cipherDataSize}B, '
-        '分$isolateCount块, 每块≈${(chunkSize / 1024 / 1024).toStringAsFixed(1)}MB');
-
-    // 4. 预分配输出文件，保持句柄打开直到所有批次写入完成
-    //
-    // 关键：不能用 FileMode.write 多次打开输出文件（会截断已写入数据），
-    // 整个并行流程复用同一句柄，由 try/finally 保证关闭。
-    final outputFile = File(outputPath);
-    final outputRaf = outputFile.openSync(mode: FileMode.write);
-    outputRaf.setPositionSync(cipherDataSize - 1);
-    outputRaf.writeByteSync(0);
-    // 注意：此处不 closeSync，保持句柄打开供 _writeBatchToOutput 复用
-
-    // 5. 分批启动 Isolate（声明在 try 外，供 catch 清理使用）
-    final pendingFutures = <Future<void>>[];
-    final chunkTempPaths = <String>[];
-    final chunkWriteOffsets = <int>[];
-    double maxProgress = 0.0;
-
-    try {
-      for (int i = 0; i < isolateCount; i++) {
-        final startOffset = i * chunkSize;
-        final length = (i == isolateCount - 1)
-            ? cipherDataSize - startOffset
-            : chunkSize;
-
-        // 计算调整后的 IV：counter += startOffset / 16
-        final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
-        final ivBase64 = base64.encode(adjustedIv);
-
-        // 临时块文件路径
-        final tempPath = '$outputPath.chunk_$i.tmp';
-        chunkTempPaths.add(tempPath);
-        chunkWriteOffsets.add(startOffset);
-
-        final future = _spawnChunkIsolateGeneric(
-          inputPath: inputPath,
-          outputPath: tempPath,
-          startOffset: startOffset,
-          chunkLength: length,
-          keyBase64: keyBase64,
-          ivBase64: ivBase64,
-          chunkIndex: i,
-          totalChunks: isolateCount,
-          isEncrypt: false,
-          writeOffset: startOffset,
-          onProgress: onProgress == null
-              ? null
-              : (globalProgress) {
-                  // 单调递增：多 chunk 并发交错时只回调最大值，避免进度来回跳
-                  if (globalProgress > maxProgress) {
-                    maxProgress = globalProgress;
-                    onProgress(maxProgress);
-                  }
-                },
-        );
-
-        pendingFutures.add(future);
-
-        // 每批 parallelDecryptMaxConcurrency 个，完成后复制到输出文件
-        if (pendingFutures.length >= parallelDecryptMaxConcurrency) {
-          await Future.wait(pendingFutures);
-          // 主线程将本批临时文件复制到输出文件对应偏移（复用已打开的句柄）
-          await _writeBatchToOutput(outputRaf, chunkTempPaths, chunkWriteOffsets);
-          // 清理临时文件
-          for (final p in chunkTempPaths) {
-            try { await File(p).delete(); } catch (_) {}
-          }
-          pendingFutures.clear();
-          chunkTempPaths.clear();
-          chunkWriteOffsets.clear();
-        }
-      }
-
-      // 6. 处理剩余的块
-      if (pendingFutures.isNotEmpty) {
-        await Future.wait(pendingFutures);
-        await _writeBatchToOutput(outputRaf, chunkTempPaths, chunkWriteOffsets);
-        for (final p in chunkTempPaths) {
-          try { await File(p).delete(); } catch (_) {}
-        }
-      }
-
-      onProgress?.call(1.0);
-    } catch (e) {
-      // 清理残留的临时 chunk 文件
-      for (final p in chunkTempPaths) {
-        try { await File(p).delete(); } catch (_) {}
-      }
-      // 删除损坏的输出文件，避免调用方误用半成品
-      try { await File(outputPath).delete(); } catch (_) {}
-      rethrow;
-    } finally {
-      outputRaf.closeSync();
-    }
-  }
-
-  /// 将一批临时块文件按各自偏移写入已打开的输出文件句柄
-  ///
-  /// **重要**：调用方负责打开和关闭 [outputRaf]，避免使用 `FileMode.write`
-  /// 重复打开导致已写入的文件头和前序批次数据被截断清零。
-  static Future<void> _writeBatchToOutput(
-    RandomAccessFile outputRaf,
-    List<String> tempPaths,
-    List<int> writeOffsets,
-  ) async {
-    final copyBuf = Uint8List(bufferSize);
-    for (int i = 0; i < tempPaths.length; i++) {
-      final chunkFile = File(tempPaths[i]);
-      final raf = chunkFile.openSync(mode: FileMode.read);
-      try {
-        outputRaf.setPositionSync(writeOffsets[i]);
-        int bytesRead;
-        do {
-          bytesRead = raf.readIntoSync(copyBuf);
-          if (bytesRead > 0) {
-            outputRaf.writeFromSync(copyBuf, 0, bytesRead);
-          }
-        } while (bytesRead == bufferSize);
-      } finally {
-        raf.closeSync();
-      }
-    }
-  }
-
-  // --- 并行加密 ---
-
-  /// 并行分块加密核心调度
-  ///
-  /// 生成 IV/Salt → 派生密钥 → 写文件头 → 分块并行 CTR 加密
-  static Future<void> _runParallelEncrypt({
-    required String inputPath,
-    required String outputPath,
-    void Function(double)? onProgress,
-    int? fileSize,
-  }) async {
-    final passwordBytes = Uint8List.fromList(utf8.encode(defaultPassword));
-
-    // 1. 生成随机 IV 和 Salt
-    final iv = _generateRandomBytes(ivLength);
-    final salt = _generateRandomBytes(saltLength);
-
-    // 2. 派生密钥
-    final key = deriveKey(passwordBytes, salt);
-    final keyBase64 = base64.encode(key);
-
-    // 3. 构建并写入文件头
-    final header = Uint8List(headerSize);
-    header.setAll(0, iv);
-    header.setAll(ivLength, salt);
-    header[versionOffset] = versionByte;
-
-    // 4. 获取原始文件大小，计算分块
-    final rawSize = fileSize ?? await File(inputPath).length();
-    final isolateCount = _getChunkCount(rawSize);
-    final rawChunkSize = rawSize ~/ isolateCount;
-    final chunkSize = (rawChunkSize ~/ aesBlockSize) * aesBlockSize;
-
-    debugPrint('[SnPlayer] 并行加密: 文件=${rawSize}B, '
-        '分$isolateCount块, 每块≈${(chunkSize / 1024 / 1024).toStringAsFixed(1)}MB');
-
-    // 5. 写文件头 + 预分配输出文件（header + 密文），保持句柄打开
-    //
-    // 关键：不能用 FileMode.write 多次打开输出文件（会截断已写入的 header），
-    // 整个并行流程复用同一句柄，由 try/finally 保证关闭。
-    final cipherDataSize = rawSize; // 密文长度 = 原始长度
-    final totalSize = headerSize + cipherDataSize;
-    final outputFile = File(outputPath);
-    final outputRaf = outputFile.openSync(mode: FileMode.write);
-    outputRaf.writeFromSync(header, 0, headerSize);
-    outputRaf.setPositionSync(totalSize - 1);
-    outputRaf.writeByteSync(0);
-    // 注意：此处不 closeSync，保持句柄打开供 _writeBatchToOutput 复用
-
-    // 6. 分批启动加密 Isolate（声明在 try 外，供 catch 清理使用）
-    final pendingFutures = <Future<void>>[];
-    final chunkTempPaths = <String>[];
-    final chunkWriteOffsets = <int>[];
-    double maxProgress = 0.0;
-
-    try {
-      for (int i = 0; i < isolateCount; i++) {
-        final startOffset = i * chunkSize;
-        final length = (i == isolateCount - 1)
-            ? rawSize - startOffset
-            : chunkSize;
-
-        // 计算调整后的 IV
-        final adjustedIv = CryptoUtils.incrementCounter(iv, startOffset ~/ aesBlockSize);
-        final adjustedIvBase64 = base64.encode(adjustedIv);
-
-        final tempPath = '$outputPath.chunk_$i.tmp';
-        chunkTempPaths.add(tempPath);
-        // 密文数据在输出文件中的偏移 = 文件头 + 块起始位置
-        chunkWriteOffsets.add(headerSize + startOffset);
-
-        final future = _spawnChunkIsolateGeneric(
-          inputPath: inputPath,
-          outputPath: tempPath,
-          startOffset: startOffset,
-          chunkLength: length,
-          keyBase64: keyBase64,
-          ivBase64: adjustedIvBase64,
-          chunkIndex: i,
-          totalChunks: isolateCount,
-          isEncrypt: true,
-          onProgress: onProgress == null
-              ? null
-              : (globalProgress) {
-                  // 单调递增：多 chunk 并发交错时只回调最大值，避免进度来回跳
-                  if (globalProgress > maxProgress) {
-                    maxProgress = globalProgress;
-                    onProgress(maxProgress);
-                  }
-                },
-        );
-
-        pendingFutures.add(future);
-
-        if (pendingFutures.length >= parallelDecryptMaxConcurrency) {
-          await Future.wait(pendingFutures);
-          await _writeBatchToOutput(outputRaf, chunkTempPaths, chunkWriteOffsets);
-          for (final p in chunkTempPaths) {
-            try { await File(p).delete(); } catch (_) {}
-          }
-          pendingFutures.clear();
-          chunkTempPaths.clear();
-          chunkWriteOffsets.clear();
-        }
-      }
-
-      if (pendingFutures.isNotEmpty) {
-        await Future.wait(pendingFutures);
-        await _writeBatchToOutput(outputRaf, chunkTempPaths, chunkWriteOffsets);
-        for (final p in chunkTempPaths) {
-          try { await File(p).delete(); } catch (_) {}
-        }
-      }
-
-      onProgress?.call(1.0);
-    } catch (e) {
-      // 清理残留的临时 chunk 文件
-      for (final p in chunkTempPaths) {
-        try { await File(p).delete(); } catch (_) {}
-      }
-      // 删除损坏的输出文件，避免调用方误用半成品
-      try { await File(outputPath).delete(); } catch (_) {}
-      rethrow;
-    } finally {
-      outputRaf.closeSync();
-    }
-  }
-
-  /// 启动单个加/解密块 Isolate（通用）
-  ///
-  /// [isEncrypt] true=加密块（encrypt_chunk），false=解密块（decrypt_chunk）
-  /// [writeOffset] 仅解密时有意义（写入输出文件的偏移），加密时传 null
-  static Future<void> _spawnChunkIsolateGeneric({
-    required String inputPath,
-    required String outputPath,
-    required int startOffset,
-    required int chunkLength,
-    required String keyBase64,
-    required String ivBase64,
-    required int chunkIndex,
-    required int totalChunks,
-    required bool isEncrypt,
-    int? writeOffset,
-    void Function(double)? onProgress,
-  }) async {
-    final completer = Completer<void>();
-    final command = isEncrypt ? 'encrypt_chunk' : 'decrypt_chunk';
-    final opLabel = isEncrypt ? 'Encrypt' : 'Decrypt';
-
-    final receivePort = ReceivePort();
-    final isolate = await Isolate.spawn(cryptoWorker, receivePort.sendPort);
-    final workerSendPort = await receivePort.first as SendPort;
-
-    final progressPort = ReceivePort();
-    progressPort.listen((event) {
-      if (event is Map) {
-        final type = event['type'] as String?;
-        if (type == 'progress') {
-          final value = (event['value'] as num?)?.toDouble();
-          if (value != null && onProgress != null) {
-            onProgress((chunkIndex + value) / totalChunks);
-          }
-        } else if (type == 'done') {
-          if (!completer.isCompleted) { completer.complete(); }
-        } else if (type == 'error') {
-          final msg = event['message'] as String? ?? 'Unknown error';
-          if (!completer.isCompleted) {
-            completer.completeError(Exception(
-                '$opLabel chunk $chunkIndex/$totalChunks failed: $msg'));
-          }
-        }
-      }
-    });
-
-    try {
-      final message = <String, dynamic>{
-        'command': command,
-        'inputPath': inputPath,
-        'outputPath': outputPath,
-        'startOffset': startOffset,
-        'chunkLength': chunkLength,
-        'keyBase64': keyBase64,
-        'ivBase64': ivBase64,
-        'chunkIndex': chunkIndex,
-        'totalChunks': totalChunks,
-        'progressPort': progressPort.sendPort,
-      };
-      if (!isEncrypt && writeOffset != null) {
-        message['writeOffset'] = writeOffset;
-      }
-      workerSendPort.send(message);
-
-      await completer.future.timeout(_isolateTimeout, onTimeout: () {
-        throw TimeoutException(
-            '$opLabel chunk $chunkIndex/$totalChunks timeout (${_isolateTimeout.inSeconds}s)');
-      });
-    } finally {
-      progressPort.close();
-      receivePort.close();
-      try {
-        isolate.kill(priority: Isolate.beforeNextEvent);
-      } catch (e) {
-        isolate.kill(priority: Isolate.immediate);
-      }
-    }
-  }
-
-  /// 确定分块数
-  static int _getChunkCount(int cipherDataSize) {
-    if (cipherDataSize >= parallelDecryptLargeFileSize) {
-      return parallelDecryptLargeIsolates; // >512MB: 6 路
-    }
-    if (cipherDataSize >= parallelDecryptMidFileSize) {
-      return parallelDecryptMaxIsolates;  // 256-512MB: 4 路
-    }
-    return parallelDecryptMidIsolates;    // 64-256MB: 2 路
-  }
-
-  /// 创建 AES-256-CTR cipher 并初始化
-  static StreamCipher _createCipher(Uint8List key, Uint8List iv) {
-    return CryptoUtils.createCtrCipher(key, iv);
-  }
+  // --- 工具 ---
 
   /// 处理一个 CTR 块（原地加解密，因为 CTR 是异或流）
   static void _processCtrBlock(
@@ -775,11 +375,6 @@ class CryptoService {
     cipher.processBytes(input, 0, length, output, dstOffset);
   }
 
-  /// 生成加密安全的随机字节
-  static Uint8List _generateRandomBytes(int length) {
-    return CryptoUtils.generateRandomBytes(length);
-  }
-
   // --- 密钥缓存 ---
 
   /// PBKDF2 派生密钥缓存，以 salt 的 base64 编码为 key
@@ -790,7 +385,7 @@ class CryptoService {
 
   static void _addToCache(String key, Uint8List value) {
     if (_keyCache.length >= _maxKeyCacheSize) {
-      // 删除最早插入的条目（Dart Map 保持插入顺序）
+      // 删除最久未访问的条目（get 命中会重插到末尾，头部即最旧）
       _keyCache.remove(_keyCache.keys.first);
     }
     _keyCache[key] = value;
@@ -800,16 +395,12 @@ class CryptoService {
 /// 加密文件元信息（代理初始化时一次性读取）
 class EncryptedFileInfo {
   final Uint8List iv;
-  final Uint8List salt;
   final Uint8List key;
   final int decryptedSize;
-  final int encFileSize;
 
   const EncryptedFileInfo({
     required this.iv,
-    required this.salt,
     required this.key,
     required this.decryptedSize,
-    required this.encFileSize,
   });
 }

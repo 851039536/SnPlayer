@@ -1,3 +1,5 @@
+// lib/services/permission_service.dart — 存储权限请求（MANAGE_EXTERNAL_STORAGE → storage → videos 三级回退）
+
 import 'package:permission_handler/permission_handler.dart';
 
 /// 权限请求服务
@@ -6,29 +8,6 @@ import 'package:permission_handler/permission_handler.dart';
 /// - API < 30：请求 WRITE_EXTERNAL_STORAGE
 /// - API >= 30：请求 MANAGE_EXTERNAL_STORAGE，引导用户跳转设置页
 class PermissionService {
-  /// 检查是否拥有存储权限
-  static Future<bool> hasStoragePermission() async {
-    // Android 13+ (API 33) 使用细粒度媒体权限
-    // Android 11-12 (API 30-32) 使用 MANAGE_EXTERNAL_STORAGE
-    // Android 10 及以下使用 WRITE_EXTERNAL_STORAGE
-
-    // 先尝试检查 manage external storage
-    final manageStatus = await Permission.manageExternalStorage.status;
-    if (manageStatus.isGranted) {
-      return true;
-    }
-
-    // 检查传统存储权限
-    final storageStatus = await Permission.storage.status;
-    if (storageStatus.isGranted) {
-      return true;
-    }
-
-    // Android 13+ 使用细粒度权限
-    final videoStatus = await Permission.videos.status;
-    return videoStatus.isGranted;
-  }
-
   /// 请求存储权限
   ///
   /// 返回 true 表示权限已获取，false 表示被拒绝
@@ -69,15 +48,5 @@ class PermissionService {
 
     videoStatus = await Permission.videos.request();
     return videoStatus.isGranted;
-  }
-
-  /// 请求媒体访问权限（用于从相册选取视频）
-  static Future<bool> requestMediaPermission() async {
-    var status = await Permission.videos.status;
-    if (status.isGranted) {
-      return true;
-    }
-    status = await Permission.videos.request();
-    return status.isGranted;
   }
 }

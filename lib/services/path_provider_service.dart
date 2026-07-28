@@ -1,3 +1,5 @@
+// lib/services/path_provider_service.dart — 统一路径管理（LockVideo/UnLockVideo/播放缓存/缩略图缓存目录）
+
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -11,6 +13,7 @@ import '../config/crypto.dart';
 class PathProviderService {
   static String? _downloadDir;
   static String? _cacheDir;
+  static String? _thumbCacheDir;
 
   /// 获取 /sdcard/Download/ 目录路径
   static Future<String> getDownloadDir() async {
@@ -55,7 +58,11 @@ class PathProviderService {
 
   /// 获取缩略图磁盘缓存目录
   static Future<String> getThumbCacheDir() async {
+    if (_thumbCacheDir != null) {
+      return _thumbCacheDir!;
+    }
     final appCache = await getTemporaryDirectory();
-    return p.join(appCache.path, thumbCacheDirName);
+    _thumbCacheDir = p.join(appCache.path, thumbCacheDirName);
+    return _thumbCacheDir!;
   }
 }

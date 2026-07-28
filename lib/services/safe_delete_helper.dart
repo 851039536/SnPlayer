@@ -1,3 +1,5 @@
+// lib/services/safe_delete_helper.dart — 安全删除工具（零覆写防恢复 + 指数退避重试 + 快速删除）
+
 import 'dart:async';
 import 'dart:io';
 
@@ -50,18 +52,33 @@ class SafeDeleteHelper {
   }
 
   /// 零覆写文件内容
+  ///
+  /// 注意：必须用不截断的 FileMode.append 打开。FileMode.write 等同 O_TRUNC，
+  /// 打开即清空文件、length 恒为 0，覆写循环一次都不会执行（安全功能实际失效）。
+  /// Dart 的 append 模式不强制追加写，可 setPosition(0) 后随机覆写。
   static Future<void> _zeroOverwrite(File file) async {
-    final raf = await file.open(mode: FileMode.write);
+    final raf = await file.open(mode: FileMode.append);
     try {
-      final zeros = Uint8List(safeDeleteBlockSize);
       final fileLength = await raf.length();
+      await raf.setPosition(0);
+
+      final zeros = Uint8List(safeDeleteOverwriteBlockSize);
       int remaining = fileLength;
+      int unflushed = 0;
 
       while (remaining > 0) {
-        final toWrite =
-            remaining > safeDeleteBlockSize ? safeDeleteBlockSize : remaining;
+        final toWrite = remaining > safeDeleteOverwriteBlockSize
+            ? safeDeleteOverwriteBlockSize
+            : remaining;
         await raf.writeFrom(zeros, 0, toWrite);
         remaining -= toWrite;
+
+        // 定期 flush 确保零块真正落盘，同时限制未落盘数据量
+        unflushed += toWrite;
+        if (unflushed >= isolateFlushIntervalBytes) {
+          await raf.flush();
+          unflushed = 0;
+        }
       }
 
       await raf.truncate(0);
@@ -90,9 +107,7 @@ class SafeDeleteHelper {
       return true;
     }
 
-    const retryDelays = [100, 500, 1000]; // ms
-
-    for (int attempt = 0; attempt < retryDelays.length; attempt++) {
+    for (int attempt = 0; attempt < fastDeleteRetryDelays.length; attempt++) {
       try {
         await file.delete();
 
@@ -103,8 +118,8 @@ class SafeDeleteHelper {
         debugPrint('[SnPlayer] SafeDeleteHelper.fastDelete 尝试 $attempt 失败: $e');
       }
 
-      if (attempt < retryDelays.length - 1) {
-        await Future.delayed(Duration(milliseconds: retryDelays[attempt]));
+      if (attempt < fastDeleteRetryDelays.length - 1) {
+        await Future.delayed(Duration(milliseconds: fastDeleteRetryDelays[attempt]));
       }
     }
 
@@ -122,14 +137,22 @@ class SafeDeleteHelper {
     final now = DateTime.now();
 
     await for (final entity in dir.list()) {
-      if (entity is File) {
+      if (entity is! File) {
+        continue;
+      }
+      try {
         final stat = await entity.stat();
         final age = now.difference(stat.modified);
         if (age > maxAge) {
-          if (await safeDelete(entity.path)) {
+          // 播放临时文件非敏感数据，用快速删除（与 PlaybackCacheManager 策略一致），
+          // 避免对数百 MB 缓存做无谓零覆写
+          if (await fastDelete(entity.path)) {
             deletedCount++;
           }
         }
+      } catch (e) {
+        // 单个文件异常（如被并发删除）不中断整个清理
+        debugPrint('[SnPlayer] SafeDeleteHelper.cleanupCacheFiles: $e');
       }
     }
 

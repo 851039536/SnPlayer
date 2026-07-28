@@ -11,6 +11,13 @@ import 'package:pointycastle/stream/ctr.dart';
 
 import '../config/crypto.dart';
 
+/// 加密文件头解析结果（IV + Salt 视图，不拷贝）
+class EncHeaderInfo {
+  final Uint8List iv;
+  final Uint8List salt;
+  const EncHeaderInfo(this.iv, this.salt);
+}
+
 /// 加密工具函数（纯 Dart，无 Flutter/Isolate 依赖，可安全被 Isolate 和主线程共用）
 class CryptoUtils {
   static final _secureRandom = Random.secure();
@@ -41,6 +48,36 @@ class CryptoUtils {
         ParametersWithIV(KeyParameter(key), iv),
       );
     return cipher;
+  }
+
+  /// 解析并校验 64 字节加密文件头，返回 IV/Salt 视图
+  ///
+  /// [bytesRead] 为实际读取的字节数：截断文件的 header 剩余部分是全零，
+  /// 不校验会误报"版本不支持"或使用垃圾 IV/Salt。
+  static EncHeaderInfo parseEncHeader(Uint8List header, int bytesRead) {
+    if (bytesRead != headerSize) {
+      throw const FormatException('加密文件损坏或不完整：文件头不足 64 字节');
+    }
+    final ver = header[versionOffset];
+    if (ver != versionByte) {
+      throw FormatException(
+        '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
+        '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
+      );
+    }
+    return EncHeaderInfo(
+      Uint8List.sublistView(header, 0, ivLength),
+      Uint8List.sublistView(header, saltOffset, saltOffset + saltLength),
+    );
+  }
+
+  /// 构建 64 字节加密文件头（IV + Salt + 版本号，保留字段全零）
+  static Uint8List buildEncHeader(Uint8List iv, Uint8List salt) {
+    final header = Uint8List(headerSize);
+    header.setAll(0, iv);
+    header.setAll(ivLength, salt);
+    header[versionOffset] = versionByte; // v2 格式版本号
+    return header;
   }
 
   /// 将 16 字节 IV 视为 big-endian 无符号整数，加上 [increment] 后返回新的 IV

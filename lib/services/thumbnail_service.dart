@@ -1,7 +1,10 @@
+// lib/services/thumbnail_service.dart — 缩略图服务（提帧/加密 .tenc 存储/磁盘缓存/过期清理）
+
 import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../config/crypto.dart';
@@ -82,32 +85,6 @@ class ThumbnailService {
     }
   }
 
-  /// 检测是否为旧版 GIF 缩略图（兼容处理）
-  ///
-  /// 读取文件头 3 字节检测 GIF 魔术字 "GIF"
-  static Future<bool> isGifThumbnail(String thumbPath) async {
-    try {
-      final file = File(thumbPath);
-      if (!await file.exists()) {
-        return false;
-      }
-
-      // 解密后检查前 3 字节
-      final encrypted = await file.readAsBytes();
-      final decrypted = CryptoService.decryptBytes(encrypted);
-
-      if (decrypted.length >= 3) {
-        return decrypted[0] == 0x47 &&
-            decrypted[1] == 0x49 &&
-            decrypted[2] == 0x46; // 'G', 'I', 'F'
-      }
-      return false;
-    } catch (e) {
-      debugPrint('[SnPlayer] ThumbnailService.isGifThumbnail: $e');
-      return false;
-    }
-  }
-
   /// 解密缩略图到磁盘缓存文件
   ///
   /// 从 .tenc 解密并写入 thumb_cache/{videoId}.jpg，
@@ -150,10 +127,15 @@ class ThumbnailService {
     String? tempPath;
     try {
       final shortId = videoId.length > 8 ? videoId.substring(0, 8) : videoId;
-      // 1. 解密视频到临时文件（放入 play_cache 以便统一清理）
+      // 1. 解密视频到独立命名的临时文件
+      //
+      // 不能复用 decryptToTemp 的 play_{name}.mp4 命名：那是播放缓存路径，
+      // 后台缩略图生成会截断正在播放的缓存，finally 还会把它删掉
       debugPrint('[SnPlayer] ThumbnailService: [$shortId] 完整解密中...');
       final playCacheDir = await PathProviderService.getCacheDir();
-      tempPath = await CryptoService.decryptToTemp(encPath, playCacheDir);
+      await Directory(playCacheDir).create(recursive: true);
+      tempPath = p.join(playCacheDir, 'thumbgen_$videoId.mp4');
+      await CryptoService.decryptFile(encPath, tempPath);
       debugPrint('[SnPlayer] ThumbnailService: [$shortId] 解密完成，提取帧...');
 
       // 2. 从临时文件提取缩略帧

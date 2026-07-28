@@ -90,13 +90,7 @@ Future<void> _encryptFileInIsolate(
   final cipher = CryptoUtils.createCtrCipher(key, iv);
 
   await _processFile(inputPath, outputPath, cipher,
-    headerBuilder: () {
-      final header = Uint8List(headerSize);
-      header.setAll(0, iv);
-      header.setAll(ivLength, salt);
-      header[versionOffset] = versionByte; // v2 格式版本号
-      return header;
-    },
+    headerBuilder: () => CryptoUtils.buildEncHeader(iv, salt),
     startOffset: 0,
     progressPort: progressPort,
   );
@@ -118,18 +112,11 @@ Future<void> _decryptFileInIsolate(
   final headerBytesRead = raf.readIntoSync(header, 0, headerSize);
   raf.closeSync();
 
-  // 校验实际读取长度：截断文件的 header 剩余部分是全零，
-  // 不校验会误报"版本不支持"或使用垃圾 IV/Salt
-  if (headerBytesRead != headerSize) {
-    throw const FormatException('加密文件损坏或不完整：文件头不足 64 字节');
-  }
+  // 解析并校验文件头（长度 + 版本），获取 IV/Salt
+  final headerInfo = CryptoUtils.parseEncHeader(header, headerBytesRead);
 
-  final iv = Uint8List.sublistView(header, 0, ivLength);
-  final salt = Uint8List.sublistView(header, saltOffset, saltOffset + saltLength);
-  _validateVersion(header);
-
-  final key = CryptoUtils.deriveKeyFromPassword(passwordBytes, salt);
-  final cipher = CryptoUtils.createCtrCipher(key, iv);
+  final key = CryptoUtils.deriveKeyFromPassword(passwordBytes, headerInfo.salt);
+  final cipher = CryptoUtils.createCtrCipher(key, headerInfo.iv);
 
   await _processFile(inputPath, outputPath, cipher,
     headerBuilder: null,
@@ -137,17 +124,6 @@ Future<void> _decryptFileInIsolate(
     progressPort: progressPort,
     maxBytes: maxBytes,
   );
-}
-
-/// 校验文件头中的格式版本号，非 v2 格式拒绝解密
-void _validateVersion(Uint8List header) {
-  final ver = header[versionOffset];
-  if (ver != versionByte) {
-    throw FormatException(
-      '不支持的加密格式版本: 0x${ver.toRadixString(16).padLeft(2, '0')}，'
-      '当前仅支持 v2 (0x02)。请使用最新版 MewTool 重新加密该文件。',
-    );
-  }
 }
 
 /// 双缓冲 I/O + CTR 流式处理核心

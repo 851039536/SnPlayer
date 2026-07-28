@@ -1,14 +1,15 @@
+// lib/services/streaming_decrypt_proxy.dart — 本地 HTTP 流式解密代理（Range 按需解密 + 内存 LRU 块缓存）
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
-import 'package:pointycastle/api.dart';
 
 import '../config/crypto.dart';
-import '../utils/crypto_utils.dart';
 import 'crypto_service.dart';
+import 'streaming_decrypt_worker.dart';
 
 /// 本地 HTTP 代理服务器，实现按需流式解密播放。
 ///
@@ -26,7 +27,6 @@ import 'crypto_service.dart';
 class StreamingDecryptProxy {
   HttpServer? _server;
 
-  late EncryptedFileInfo _fileInfo;
   late Uint8List _iv;
   late Uint8List _key;
   late int _decryptedSize;
@@ -52,15 +52,21 @@ class StreamingDecryptProxy {
   /// 每个 decrypt_range 分配唯一 ID，cancel 携带目标 ID，worker 仅取消匹配请求。
   int _nextRequestId = 0;
 
+  /// 活跃请求的 replyPort 集合
+  ///
+  /// stop() 时逐个 close：worker 被 kill 后不再回消息，
+  /// 卡在 `await for (replyPort)` 的请求 Future 会永久挂起并泄漏端口。
+  final Set<ReceivePort> _activeReplyPorts = {};
+
   /// 启动代理服务器，返回分配的端口号。
   Future<int> start(String encPath) async {
     _encPath = encPath;
 
     // 1. 读取加密文件元信息
-    _fileInfo = await CryptoService.getEncryptedFileInfo(encPath);
-    _iv = _fileInfo.iv;
-    _key = _fileInfo.key;
-    _decryptedSize = _fileInfo.decryptedSize;
+    final fileInfo = await CryptoService.getEncryptedFileInfo(encPath);
+    _iv = fileInfo.iv;
+    _key = fileInfo.key;
+    _decryptedSize = fileInfo.decryptedSize;
 
     // 2. 推断 Content-Type（根据原始文件名扩展名）
     _contentType = _guessContentType(encPath);
@@ -80,7 +86,7 @@ class StreamingDecryptProxy {
 
     // 4. spawn 长驻解密 worker Isolate
     final workerReceivePort = ReceivePort();
-    _worker = await Isolate.spawn(_decryptWorkerEntry, workerReceivePort.sendPort);
+    _worker = await Isolate.spawn(decryptWorkerEntry, workerReceivePort.sendPort);
     _workerSendPort = await workerReceivePort.first as SendPort;
 
     // 初始化 worker（传递 key/iv/encPath，只传一次）
@@ -141,8 +147,15 @@ class StreamingDecryptProxy {
     await _server?.close(force: true);
     _server = null;
 
+    // 关闭活跃请求的 replyPort：worker 被 kill 后不再回消息，
+    // 不关闭会让 _decryptAndStream 的 await for 永久挂起
+    for (final port in _activeReplyPorts.toList()) {
+      port.close();
+    }
+    _activeReplyPorts.clear();
+
     // 停止解密 worker Isolate
-    // 注：kill(immediate) 会立即终止 Isolate，无需先 send('stop')（消息不会被处理）
+    // 注：kill(immediate) 会立即终止 Isolate，无需先发消息（消息不会被处理）
     _worker?.kill(priority: Isolate.immediate);
     _worker = null;
     _workerSendPort = null;
@@ -318,27 +331,11 @@ class StreamingDecryptProxy {
     return _Range(start, end);
   }
 
-  /// 解密块大小（512KB）
-  ///
-  /// 解密在 worker Isolate 中执行，主线程零同步阻塞。
-  /// 512KB 平衡了 Isolate 间数据传递开销和系统调用次数。
-  static const int _decryptBlockSize = 512 * 1024;
-
   /// 解密并流式输出指定范围的数据
   ///
-  /// **架构**：解密在长驻 worker Isolate 中执行，主线程仅负责 HTTP 响应写入。
-  /// 主线程事件循环零同步阻塞，播放器的并发 Range 请求（视频轨+音频轨+seek）
-  /// 可即时响应，从根本上消除卡顿。
-  ///
-  /// **流控**：worker 每发 [_ackWindowSize] 块后等主线程 ack（ack 窗口）。
-  /// 主线程 flush 完成后才发 ack，worker 才继续解密。
-  /// 这天然限制了超前解密量（最多 ~1MB），无需人为节流延迟。
-  ///
-  /// **取消**：seek 时旧连接断开，主线程发 cancel + ack 唤醒 worker 退出。
-  ///
-  /// **缓存**：主线程侧 LRU 块缓存，命中时直接返回不经过 worker。
-  /// worker 回传的整块数据也更新缓存。
-  /// 解密并流式输出指定范围的数据
+  /// 解密在长驻 worker Isolate 中执行（streaming_decrypt_worker.dart），
+  /// 主线程仅负责 HTTP 响应写入；LRU 块缓存命中时不经过 worker；
+  /// ack 窗口流控限制超前解密量；seek 时旧连接断开，发 cancel + ack 唤醒 worker 退出。
   ///
   /// 返回 true 表示完整写入了 contentLength 字节；
   /// 返回 false 表示提前终止（seek/取消/连接断开/worker 错误）。
@@ -350,19 +347,19 @@ class StreamingDecryptProxy {
     int remaining = contentLength;
     int currentPos = rangeStart;
 
-    response.bufferOutput = false;
-
     // 阶段 1：处理连续的缓存命中块（主线程直接返回，不经过 worker）
     while (remaining > 0 && !_stopped) {
-      final blockIndex = currentPos ~/ _decryptBlockSize;
-      final blockOffset = currentPos % _decryptBlockSize;
+      final blockIndex = currentPos ~/ streamingDecryptBlockSize;
+      final blockOffset = currentPos % streamingDecryptBlockSize;
       final cachedBlock = _blockCache.get(blockIndex);
 
       if (cachedBlock == null) {
         break;
       }
 
-      final chunkLen = remaining < _decryptBlockSize ? remaining : _decryptBlockSize;
+      final chunkLen = remaining < streamingDecryptBlockSize
+          ? remaining
+          : streamingDecryptBlockSize;
       final srcEnd = blockOffset + chunkLen;
       final actualEnd = srcEnd > cachedBlock.length ? cachedBlock.length : srcEnd;
       final actualCopyLen = actualEnd - blockOffset;
@@ -396,6 +393,7 @@ class StreamingDecryptProxy {
     }
 
     final replyPort = ReceivePort();
+    _activeReplyPorts.add(replyPort);
     SendPort? ackPort;
 
     // 分配唯一 requestId，用于精确取消此请求（不影响并发的其他 decrypt_range）
@@ -458,12 +456,12 @@ class StreamingDecryptProxy {
         }
       }
     } finally {
+      _activeReplyPorts.remove(replyPort);
       replyPort.close();
     }
 
     return false;
   }
-
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -493,244 +491,9 @@ class _BlockCache {
   }
 }
 
-
 /// HTTP Range 解析结果
 class _Range {
   final int start;
   final int end;
   const _Range(this.start, this.end);
-}
-
-// ═══════════════════════════════════════════════════════════
-// 解密 Worker Isolate（长驻）
-// ═══════════════════════════════════════════════════════════
-//
-// 解密在独立 Isolate 执行，主线程事件循环零同步阻塞。
-// 主线程通过 SendPort 发送命令，worker 通过 replyPort 回传解密数据块。
-//
-// 命令：
-// - 'init': 初始化 key/iv/encPath（只调一次）
-// - 'decrypt_range': 解密指定范围，连续回传数据块
-// - 'cancel': 取消当前解密任务（seek 时调用）
-// - 'stop': 关闭 worker
-//
-// 流控：worker 每发 [ackWindowSize] 块后等主线程 ack，
-// 防止超前解密导致内存积压。主线程 flush 完成后才发 ack。
-//
-// 并发：worker 的 async 事件循环可交替处理多个 decrypt_range 请求
-// （视频轨+音频轨），各请求有独立的 replyPort 和 ackReceivePort。
-
-/// worker 入口函数（顶层函数，Isolate.spawn 要求）
-void _decryptWorkerEntry(SendPort mainPort) {
-  final receivePort = ReceivePort();
-  mainPort.send(receivePort.sendPort);
-
-  Uint8List? key;
-  Uint8List? iv;
-  String? encPath;
-
-  // 用 Set 跟踪被取消的 requestId，支持并发取消（视频轨+音频轨同时 seek）
-  // 替代单一 int? cancelledRequestId，避免后发的 cancel 覆盖前一个
-  final cancelledRequests = <int>{};
-
-  // 每个活跃请求的 ackReceivePort.sendPort
-  // cancel 时通过它发 'cancel-ack' 唤醒卡在 await ack 中的任务，避免死锁
-  final requestAckPorts = <int, SendPort>{};
-
-  receivePort.listen((message) async {
-    if (message is! Map) {
-      return;
-    }
-    final type = message['type'] as String?;
-
-    if (type == 'init') {
-      key = message['key'] as Uint8List;
-      iv = message['iv'] as Uint8List;
-      encPath = message['encPath'] as String;
-      return;
-    }
-
-    if (type == 'cancel') {
-      final rid = message['requestId'] as int;
-      cancelledRequests.add(rid);
-      // 唤醒可能卡在 await ackReceivePort.first 中的任务
-      requestAckPorts[rid]?.send('cancel-ack');
-      return;
-    }
-
-    if (type == 'stop') {
-      receivePort.close();
-      return;
-    }
-
-    if (type == 'decrypt_range') {
-      if (key == null || iv == null || encPath == null) {
-        final replyPort = message['replyPort'] as SendPort;
-        replyPort.send({'type': 'error', 'message': 'worker not initialized'});
-        return;
-      }
-
-      final requestId = message['requestId'] as int;
-      final replyPort = message['replyPort'] as SendPort;
-      try {
-        await _decryptRangeInWorker(
-          message['rangeStart'] as int,
-          message['contentLength'] as int,
-          replyPort,
-          key!,
-          iv!,
-          encPath!,
-          () => cancelledRequests.contains(requestId),
-          requestId,
-          requestAckPorts,
-        );
-      } catch (e) {
-        replyPort.send({'type': 'error', 'message': e.toString()});
-      } finally {
-        // 清理：移除 ackPort 和取消标记，避免 Set/Map 无限增长
-        requestAckPorts.remove(requestId);
-        cancelledRequests.remove(requestId);
-      }
-    }
-  });
-}
-
-/// worker 内部：解密指定范围并流式回传
-///
-/// 使用 ack 窗口流控（[ackWindowSize] 块等一次 ack），
-/// 检查 [isCancelled] 以支持 seek 时取消旧任务。
-/// cipher 复用：连续块位置无需重建 CTR cipher。
-Future<void> _decryptRangeInWorker(
-  int rangeStart,
-  int contentLength,
-  SendPort replyPort,
-  Uint8List key,
-  Uint8List iv,
-  String encPath,
-  bool Function() isCancelled,
-  int requestId,
-  Map<int, SendPort> requestAckPorts,
-) async {
-  const blockSize = 512 * 1024;
-  const ackWindowSize = 4; // 每发 4 块等一次 ack，最多积压 ~2MB，减少 seek 后等待次数
-
-  final ackReceivePort = ReceivePort();
-  bool ackPortSent = false;
-
-  // 注册 ackPort，供 cancel 回调唤醒卡在 await ack 的任务
-  requestAckPorts[requestId] = ackReceivePort.sendPort;
-
-  // 用 StreamIterator 替代 ackReceivePort.first：
-  // ReceivePort 是 single-subscription stream，first 内部 listen+cancel 会关闭端口，
-  // 第二次 first 再 listen 会抛 "Stream has already been listened to"。
-  // StreamIterator 保持单个持久订阅，moveNext() 等待下一个事件，可多次调用。
-  final ackIterator = StreamIterator(ackReceivePort);
-
-  final encFile = await File(encPath).open(mode: FileMode.read);
-
-  try {
-    int currentPos = rangeStart;
-    int remaining = contentLength;
-
-    StreamCipher? cipher;
-    int cipherPos = -1;
-    int lastFilePos = -1;
-
-    final buf = Uint8List(blockSize);
-    final procBuf = Uint8List(blockSize);
-
-    int sentSinceLastAck = 0;
-    // 首块用小尺寸（64KB）快速返回，让播放器尽快开始解码（seek 后首字节延迟从
-    // ~100ms 降至 ~15ms）。后续块恢复 blockSize（512KB）提升吞吐。
-    bool isFirstChunk = true;
-    const firstChunkSize = 64 * 1024;
-
-    while (remaining > 0) {
-      if (isCancelled()) {
-        replyPort.send({'type': 'cancelled'});
-        return;
-      }
-
-      // 首块小尺寸快速返回，后续块恢复 blockSize
-      final currentChunkLimit = isFirstChunk ? firstChunkSize : blockSize;
-      final chunkLen = remaining < currentChunkLimit ? remaining : currentChunkLimit;
-
-      final alignedStart = (currentPos ~/ aesBlockSize) * aesBlockSize;
-      final skipBytes = currentPos - alignedStart;
-
-      // cipher 复用：连续块位置无需重建
-      if (cipher == null || cipherPos != alignedStart) {
-        final counterOffset = alignedStart ~/ aesBlockSize;
-        final adjustedIv = CryptoUtils.incrementCounter(iv, counterOffset);
-        cipher = CryptoUtils.createCtrCipher(key, adjustedIv);
-      }
-
-      final cipherFileOffset = headerSize + alignedStart;
-      if (cipherFileOffset != lastFilePos) {
-        await encFile.setPosition(cipherFileOffset);
-      }
-
-      final totalDecryptLen = skipBytes + chunkLen;
-      final readLen = totalDecryptLen < blockSize ? totalDecryptLen : blockSize;
-      final bytesRead = await encFile.readInto(buf, 0, readLen);
-
-      if (bytesRead <= 0) {
-        break;
-      }
-
-      cipher.processBytes(buf, 0, bytesRead, procBuf, 0);
-      cipherPos = alignedStart + bytesRead;
-      lastFilePos = cipherFileOffset + bytesRead;
-
-      final outputStart = skipBytes;
-      // 首块小尺寸时，只截取 chunkLen 长度（可能 < bytesRead）
-      final outputEnd = isFirstChunk ? (skipBytes + chunkLen) : bytesRead;
-      final outputLen = outputEnd - outputStart;
-
-      if (outputLen > 0) {
-        final outputData =
-            Uint8List.fromList(procBuf.sublist(outputStart, outputEnd));
-        final blockIndex = alignedStart ~/ blockSize;
-        // 仅当 alignedStart 是 blockSize 对齐时才缓存整块。
-        // 否则 blockIndex 与实际数据范围不对应（如 alignedStart=96 缓存到 blockIndex=0，
-        // 但数据是明文 96-524384 而非块 0 的 0-524287），seek 回退时返回错位数据 →
-        // ExoPlayer Invalid NAL length。
-        final isFullBlock = skipBytes == 0 &&
-            bytesRead >= blockSize &&
-            alignedStart % blockSize == 0;
-
-        final blockMsg = <String, dynamic>{
-          'type': 'block',
-          'data': outputData,
-          'blockIndex': blockIndex,
-          'isFullBlock': isFullBlock,
-        };
-
-        // 第一块附带 ackPort，主线程缓存后复用
-        if (!ackPortSent) {
-          blockMsg['ackPort'] = ackReceivePort.sendPort;
-          ackPortSent = true;
-        }
-
-        replyPort.send(blockMsg);
-        sentSinceLastAck++;
-
-        // 窗口流控：每 ackWindowSize 块等一次 ack
-        if (sentSinceLastAck >= ackWindowSize) {
-          await ackIterator.moveNext();
-          sentSinceLastAck = 0;
-        }
-      }
-
-      remaining -= outputLen;
-      currentPos += outputLen;
-      isFirstChunk = false;
-    }
-
-    replyPort.send({'type': 'done'});
-  } finally {
-    await encFile.close();
-    await ackIterator.cancel();
-    ackReceivePort.close();
-  }
 }

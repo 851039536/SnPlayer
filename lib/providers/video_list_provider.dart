@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import '../models/video_item.dart';
 import '../config/crypto.dart';
 import '../services/crypto_service.dart';
+import '../services/playback_cache_manager.dart';
 import '../services/storage_service.dart';
 import '../services/safe_delete_helper.dart';
 import '../services/thumbnail_service.dart';
@@ -42,11 +43,31 @@ class VideoListProvider extends ChangeNotifier {
   /// 后台生成进度：总数
   int get missingThumbnailTotal => _missingThumbnailTotal;
 
+  /// 启动缓存清理是否已触发（仅首次 loadVideos 时执行一次）
+  bool _startupCleanupDone = false;
+
   /// 加载视频列表并扫描文件
   Future<void> loadVideos() async {
     await StorageService.initDirectories();
+
+    // 启动时后台清理播放缓存（过期 3 天 + LRU 超量 500MB），不阻塞首屏
+    if (!_startupCleanupDone) {
+      _startupCleanupDone = true;
+      unawaited(_runStartupCacheCleanup());
+    }
+
     _videos = await StorageService.scanEncryptedVideos();
     notifyListeners();
+  }
+
+  /// 启动时的播放缓存清理（失败不影响主流程）
+  Future<void> _runStartupCacheCleanup() async {
+    try {
+      final cacheDir = await PathProviderService.getCacheDir();
+      await PlaybackCacheManager.performCleanup(cacheDir);
+    } catch (e) {
+      debugPrint('[SnPlayer] VideoListProvider: 启动缓存清理失败: $e');
+    }
   }
 
   /// 获取指定文件夹下的视频
