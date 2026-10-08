@@ -51,14 +51,14 @@ class VideoActionsHandler {
         ActionSheetItem(
           icon: Icons.open_in_new_rounded,
           label: '第三方播放',
-          color: AppColors.warning,
+          color: AppColors.warningOf(context),
           onTap: () => _externalPlay.play(context, video),
         ),
         // 解密导出
         ActionSheetItem(
           icon: Icons.file_download_rounded,
           label: '解密导出',
-          color: AppColors.success,
+          color: AppColors.successOf(context),
           onTap: () => _decryptVideo(context, video, videoProvider),
         ),
         // 重命名

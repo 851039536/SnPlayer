@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../models/video_item.dart';
 import '../config/crypto.dart';
+import '../utils/color_utils.dart';
+import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
 import '../theme/app_sizes.dart';
@@ -18,11 +20,22 @@ class VideoCard extends StatelessWidget {
   final String? processingState;
   final VoidCallback onTap;
 
+  /// 所属文件夹的显示名（null = 根目录，或未提供）
+  ///
+  /// 注意不能直接用 [VideoItem.folderName]：那是物理目录名
+  /// （如 folder_20260728153000_a1b2c3），对用户无意义。
+  final String? folderLabel;
+
+  /// 所属文件夹的颜色（十六进制），与文件夹标签栏保持一致
+  final String? folderColor;
+
   const VideoCard({
     super.key,
     required this.video,
     this.processingState,
     required this.onTap,
+    this.folderLabel,
+    this.folderColor,
   });
 
   @override
@@ -91,23 +104,35 @@ class VideoCard extends StatelessWidget {
               ],
             ],
           ),
-          if (video.folderName != null) ...[
-            const SizedBox(height: AppSpacing.spacing1),
-            // 标签超长时省略，避免撑破卡片
+          if (folderLabel != null) ...[
+            const SizedBox(height: AppSpacing.spacing2),
+            // 用文件夹自身颜色，与标签栏色彩语言保持一致；
+            // 超长时省略，避免撑破卡片
             Container(
               padding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.spacing2, vertical: 2),
               decoration: BoxDecoration(
-                color: colorScheme.secondaryContainer.withValues(alpha: 0.4),
+                color: folderTint.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(AppRadius.sm),
               ),
-              child: Text(
-                video.folderName!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: colorScheme.onSecondaryContainer,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.folder_rounded,
+                      size: AppSizes.iconXxs, color: folderTint),
+                  const SizedBox(width: AppSpacing.spacing1),
+                  Flexible(
+                    child: Text(
+                      folderLabel!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: folderTint,
+                            fontWeight: FontWeight.w500,
+                          ),
                     ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -116,9 +141,16 @@ class VideoCard extends StatelessWidget {
     );
   }
 
+  /// 文件夹标签配色：优先用文件夹自身颜色，缺失时回退品牌色
+  Color get folderTint {
+    final hex = folderColor;
+    if (hex == null) { return AppColors.brand; }
+    return ColorUtils.parseHexColor(hex) ?? AppColors.brand;
+  }
+
   Widget _buildThumbnail(ColorScheme colorScheme) {
     return AspectRatio(
-      aspectRatio: 16 / 9,
+      aspectRatio: AppSizes.videoThumbnailAspectRatio,
       child: Stack(
         fit: StackFit.expand,
         children: [

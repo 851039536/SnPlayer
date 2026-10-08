@@ -28,4 +28,14 @@ class AppSpacing {
 
   /// 32px — 页面级间距
   static const double spacing8 = 32.0;
+
+  // ── 组件级语义间距 ──
+
+  /// 底部弹窗（BottomSheet）水平内边距
+  ///
+  /// 统一所有 Sheet 的左右留白，避免同类弹窗标题起始位置不一致。
+  static const double sheetHorizontal = spacing6;
+
+  /// 底部弹窗顶部内边距（拖拽指示条之上）
+  static const double sheetTop = spacing3;
 }

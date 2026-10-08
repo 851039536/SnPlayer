@@ -35,6 +35,15 @@ class AppSizes {
   /// 44px — 标准图标按钮容器/播放器主按钮
   static const double iconButtonMd = 44.0;
 
+  /// 32px — 颜色选择色块
+  static const double colorSwatch = 32.0;
+
+  /// 48px — 空状态/错误状态大图标
+  static const double emptyStateIcon = 48.0;
+
+  /// 64px — 空列表大图标
+  static const double emptyListIcon = 64.0;
+
   // ── 视频网格布局 ──
 
   /// 视频网格列数
@@ -43,6 +52,13 @@ class AppSizes {
   /// 实际布局错位导致缩略图加载到错误的视频。
   static const int gridCrossAxisCount = 2;
 
-  /// 视频卡片宽高比（1.0 = 正方形）
-  static const double videoCardAspectRatio = 1.0;
+  /// 视频卡片宽高比（< 1 表示竖向长卡片）
+  ///
+  /// 缩略图固定 16:9，信息区需容纳 3 行（标题/大小/文件夹标签）。
+  /// 正方形(1.0)时信息区仅剩约 44% 高度，在窄屏临界溢出；
+  /// 0.8 让缩略图约占 45%、信息区约占 55%，排版更从容。
+  static const double videoCardAspectRatio = 0.8;
+
+  /// 卡片缩略图宽高比（16:9）
+  static const double videoThumbnailAspectRatio = 16 / 9;
 }

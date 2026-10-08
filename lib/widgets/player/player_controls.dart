@@ -107,7 +107,7 @@ class _PlayerControlsState extends State<PlayerControls> {
           begin: Alignment.bottomCenter,
           end: Alignment.topCenter,
           colors: [
-            Colors.black.withValues(alpha: 0.85),
+            AppColors.playerScrim,
             Colors.black.withValues(alpha: 0.4),
             Colors.transparent,
           ],
@@ -149,7 +149,7 @@ class _PlayerControlsState extends State<PlayerControls> {
         style: TextStyle(
           color: _currentSpeed != 1.0
               ? AppColors.brand
-              : Colors.white70,
+              : AppColors.playerOnSurface,
           fontSize: AppFontSize.xs,
           fontWeight: FontWeight.w600,
         ),
@@ -169,7 +169,7 @@ class _PlayerControlsState extends State<PlayerControls> {
               child: const Text(
                 '-10s',
                 style: TextStyle(
-                  color: Colors.white70,
+                  color: AppColors.playerOnSurface,
                   fontSize: AppFontSize.xs,
                   fontWeight: FontWeight.w500,
                 ),
@@ -194,8 +194,8 @@ class _PlayerControlsState extends State<PlayerControls> {
               child: Container(
                 width: AppSizes.iconButtonMd,
                 height: AppSizes.iconButtonMd,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
+                decoration: const BoxDecoration(
+                  color: AppColors.playerButtonFill,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
@@ -213,7 +213,7 @@ class _PlayerControlsState extends State<PlayerControls> {
               child: const Text(
                 '+10s',
                 style: TextStyle(
-                  color: Colors.white70,
+                  color: AppColors.playerOnSurface,
                   fontSize: AppFontSize.xs,
                   fontWeight: FontWeight.w500,
                 ),
@@ -254,7 +254,7 @@ class _ControlButton extends StatelessWidget {
         child: child ??
             Icon(
               icon,
-              color: Colors.white70,
+              color: AppColors.playerOnSurface,
               size: AppSizes.iconSm,
             ),
       ),

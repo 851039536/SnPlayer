@@ -54,12 +54,13 @@ class SpeedSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(AppSpacing.spacing6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E1E2E),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(AppRadius.xxl)),
+      decoration: const BoxDecoration(
+        color: AppColors.playerSurface,
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(AppRadius.xxl)),
         border: Border(
           top: BorderSide(
-            color: Colors.white.withValues(alpha: 0.1),
+            color: AppColors.playerOutline,
             width: 1,
           ),
         ),
@@ -82,45 +83,56 @@ class SpeedSelector extends StatelessWidget {
               ),
             ),
             const SizedBox(height: AppSpacing.spacing5),
-            // 速度网格
-            Wrap(
-              spacing: AppSpacing.spacing4,
-              runSpacing: AppSpacing.spacing4,
-              alignment: WrapAlignment.center,
-              children: _speeds.map((speed) {
-                final isSelected = currentSpeed == speed;
-                return GestureDetector(
-                  onTap: () {
-                    onSpeedSelected(speed);
-                    Navigator.pop(context);
-                  },
-                  child: AnimatedContainer(
-                    duration: AppDuration.standard,
-                    width: (MediaQuery.of(context).size.width - 88) / 3,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? AppColors.brand
-                          : Colors.white.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(AppRadius.lg),
-                      border: isSelected
-                          ? null
-                          : Border.all(
-                              color: Colors.white.withValues(alpha: 0.1),
-                            ),
-                    ),
-                    child: Text(
-                      _speedLabel(speed),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: isSelected ? Colors.white : Colors.white70,
-                        fontSize: AppFontSize.sm,
-                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+            // 速度网格：3 列等分，用 LayoutBuilder 实测宽度避免魔法数字
+            LayoutBuilder(
+              builder: (context, constraints) {
+                const columns = 3;
+                const gap = AppSpacing.spacing4;
+                final itemWidth =
+                    (constraints.maxWidth - gap * (columns - 1)) / columns;
+
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  alignment: WrapAlignment.center,
+                  children: _speeds.map((speed) {
+                    final isSelected = currentSpeed == speed;
+                    return GestureDetector(
+                      onTap: () {
+                        onSpeedSelected(speed);
+                        Navigator.pop(context);
+                      },
+                      child: AnimatedContainer(
+                        duration: AppDuration.standard,
+                        width: itemWidth,
+                        padding: const EdgeInsets.symmetric(
+                            vertical: AppSpacing.spacing4),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? AppColors.brand
+                              : AppColors.playerSurfaceVariant,
+                          borderRadius: BorderRadius.circular(AppRadius.lg),
+                          border: isSelected
+                              ? null
+                              : Border.all(color: AppColors.playerOutline),
+                        ),
+                        child: Text(
+                          _speedLabel(speed),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: isSelected
+                                ? Colors.white
+                                : AppColors.playerOnSurface,
+                            fontSize: AppFontSize.sm,
+                            fontWeight:
+                                isSelected ? FontWeight.w600 : FontWeight.w400,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  }).toList(),
                 );
-              }).toList(),
+              },
             ),
             const SizedBox(height: AppSpacing.spacing3),
           ],

@@ -249,7 +249,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
     }
 
     return Scaffold(
-      extendBody: true,
+      // 不用 extendBody：内容不再绘制到底部栏之下，避免末尾卡片被遮挡
       appBar: _buildAppBar(),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -265,8 +265,13 @@ class _VideoListScreenState extends State<VideoListScreen> {
             SliverToBoxAdapter(child: _buildFolderTabs()),
             // 视频列表
             _buildVideoGrid(),
-            // 底部留白（给 FAB + 状态栏留空间）
-            const SliverPadding(padding: EdgeInsets.only(bottom: 80)),
+            // 底部留白（给状态栏本身留呼吸空间，不依赖猜测的高度）
+            SliverPadding(
+              padding: EdgeInsets.only(
+                bottom: AppSpacing.spacing4 +
+                    MediaQuery.viewPaddingOf(context).bottom,
+              ),
+            ),
           ],
         ),
       ),
@@ -333,13 +338,19 @@ class _VideoListScreenState extends State<VideoListScreen> {
       selector: (_, videoProvider, folderProvider) =>
           videoProvider.getVideosInFolder(folderProvider.selectedFolder),
       builder: (context, allVideos, _) {
+        // 物理目录名 -> VideoFolder，供卡片渲染文件夹显示名与颜色
+        final folderByName = {
+          for (final f in context.read<FolderProvider>().folders) f.name: f,
+        };
+
         if (allVideos.isEmpty) {
           return SliverFillRemaining(
             child: Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.video_library_outlined, size: 64,
+                  Icon(Icons.video_library_outlined,
+                    size: AppSizes.emptyListIcon,
                     color: Theme.of(context)
                         .colorScheme.onSurfaceVariant.withValues(alpha: 0.3)),
                   const SizedBox(height: AppSpacing.spacing5),
@@ -376,12 +387,15 @@ class _VideoListScreenState extends State<VideoListScreen> {
             delegate: SliverChildBuilderDelegate(
               (context, index) {
                 final video = allVideos[index];
+                final folder = folderByName[video.folderName];
                 return _VideoCardSlot(
                   // key 保证卡片在列表增删时保持元素身份，避免不必要重建
                   key: ValueKey(video.id),
                   video: video,
-                  onTap: () => _actions.showActions(context, video,
-                      context.read<VideoListProvider>()),
+                  folderLabel: folder?.displayName,
+                  folderColor: folder?.color,
+                  onTap: () => _actions.showActions(
+                      context, video, context.read<VideoListProvider>()),
                 );
               },
               childCount: allVideos.length,
@@ -402,8 +416,13 @@ class _VideoListScreenState extends State<VideoListScreen> {
         return GestureDetector(
           onTap: _showStorageStats,
           child: Container(
-            margin: const EdgeInsets.fromLTRB(
-              AppSpacing.spacing4, 0, AppSpacing.spacing4, AppSpacing.spacing2),
+            margin: EdgeInsets.fromLTRB(
+              AppSpacing.spacing4,
+              0,
+              AppSpacing.spacing4,
+              // 叠加系统手势条高度，避免被遮挡或误触
+              AppSpacing.spacing2 + MediaQuery.viewPaddingOf(context).bottom,
+            ),
             padding: const EdgeInsets.symmetric(
               horizontal: AppSpacing.spacing4, vertical: AppSpacing.spacing1),
             decoration: BoxDecoration(
@@ -602,10 +621,16 @@ class _VideoCardSlot extends StatelessWidget {
   final VideoItem video;
   final VoidCallback onTap;
 
+  /// 文件夹显示名与颜色（由外层按 folderName 解析后传入）
+  final String? folderLabel;
+  final String? folderColor;
+
   const _VideoCardSlot({
     super.key,
     required this.video,
     required this.onTap,
+    this.folderLabel,
+    this.folderColor,
   });
 
   @override
@@ -620,6 +645,8 @@ class _VideoCardSlot extends StatelessWidget {
           video: video,
           processingState: data.state,
           onTap: onTap,
+          folderLabel: folderLabel,
+          folderColor: folderColor,
         );
       },
     );

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../services/crypto_service.dart';
@@ -12,6 +13,7 @@ import '../services/path_provider_service.dart';
 import '../services/playback_cache_manager.dart';
 import '../services/streaming_decrypt_proxy.dart';
 import '../theme/app_font_size.dart';
+import '../theme/app_sizes.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/player/player_gesture.dart';
 import '../widgets/player/player_controls.dart';
@@ -178,8 +180,35 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   // --- 全屏 ---
 
-  void _toggleFullscreen() {
-    setState(() => _isFullscreen = !_isFullscreen);
+  /// 切换全屏：隐藏系统栏 + 横屏；退出时恢复系统栏 + 竖屏
+  Future<void> _toggleFullscreen() async {
+    final entering = !_isFullscreen;
+    setState(() => _isFullscreen = entering);
+
+    if (entering) {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    } else {
+      await SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.edgeToEdge,
+        overlays: SystemUiOverlay.values,
+      );
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+      ]);
+    }
+  }
+
+  /// 恢复系统 UI 与方向（dispose 时必须调用，否则退出页面后仍停留在全屏态）
+  Future<void> _restoreSystemUi() async {
+    await SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.edgeToEdge,
+      overlays: SystemUiOverlay.values,
+    );
+    await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
   }
 
   // --- 手势回调 ---
@@ -196,6 +225,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   @override
   void dispose() {
+    // 退出页面时务必恢复系统栏与方向，否则会残留全屏态影响列表页
+    unawaited(_restoreSystemUi());
+
     _controller?.dispose();
 
     // 停止流式解密代理（如果在用）
@@ -218,10 +250,11 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      appBar: _buildAppBar(colorScheme),
+      // 全屏时隐藏 AppBar，把整屏交给视频
+      appBar: _isFullscreen ? null : _buildAppBar(colorScheme),
       body: SafeArea(
-        top: false,
+        // 非全屏时 AppBar 已占据顶部，无需再让出安全区
+        top: _isFullscreen,
         child: Center(
           child: _buildContent(colorScheme),
         ),
@@ -231,7 +264,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   PreferredSizeWidget? _buildAppBar(ColorScheme colorScheme) {
     return AppBar(
-      backgroundColor: Colors.black.withValues(alpha: 0.6),
+      backgroundColor: Colors.black,
       foregroundColor: Colors.white,
       elevation: 0,
       title: Text(
@@ -240,6 +273,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           color: Colors.white,
           fontSize: AppFontSize.base,
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
@@ -280,7 +315,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.error_outline, size: 48, color: Colors.white70),
+          const Icon(Icons.error_outline,
+              size: AppSizes.emptyStateIcon, color: Colors.white70),
           const SizedBox(height: AppSpacing.spacing5),
           Text(
             _error!,

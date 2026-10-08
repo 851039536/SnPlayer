@@ -70,7 +70,7 @@ class StorageStatsDialog extends StatelessWidget {
             label: '缩略图源',
             count: tencCount,
             size: tencSize,
-            color: AppColors.success,
+            color: AppColors.successOf(context),
           ),
 
           const SizedBox(height: AppSpacing.spacing4),
@@ -83,7 +83,7 @@ class StorageStatsDialog extends StatelessWidget {
             label: '播放缓存',
             count: cacheCount,
             size: cacheSize,
-            color: AppColors.warning,
+            color: AppColors.warningOf(context),
           ),
           const SizedBox(height: AppSpacing.spacing3),
           _buildStatRow(
@@ -92,7 +92,7 @@ class StorageStatsDialog extends StatelessWidget {
             label: '缩略图缓存',
             count: thumbCacheCount,
             size: thumbCacheSize,
-            color: AppColors.brand,
+            color: AppColors.brandOf(context),
           ),
 
           const SizedBox(height: AppSpacing.spacing3),
@@ -101,7 +101,7 @@ class StorageStatsDialog extends StatelessWidget {
             FileUtils.formatFileSize(totalSize), colorScheme.primary),
           const SizedBox(height: AppSpacing.spacing2),
           _buildTotalRow(context, '其中可清理',
-            FileUtils.formatFileSize(clearableSize), AppColors.warning),
+            FileUtils.formatFileSize(clearableSize), AppColors.warningOf(context)),
         ],
       ),
       actions: [
@@ -152,13 +152,19 @@ class StorageStatsDialog extends StatelessWidget {
         Expanded(
           child: Row(
             children: [
-              Text(label,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface,
+              // label 可伸缩并省略，避免长标签 + 大计数在窄屏溢出
+              Flexible(
+                child: Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSurface,
+                  ),
                 ),
               ),
               const SizedBox(width: AppSpacing.spacing2),
               Text('$count 个',
+                maxLines: 1,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),

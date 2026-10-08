@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/storage_service.dart';
+import '../widgets/sheet_handle.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
@@ -81,22 +82,12 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // 拖拽指示条
-            Center(
-              child: Container(
-                margin: const EdgeInsets.only(
-                  top: AppSpacing.spacing3, bottom: AppSpacing.spacing5),
-                width: 32,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
+            const SheetHandle(),
 
             // 标题行
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing6),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sheetHorizontal),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -133,7 +124,8 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
               ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing5),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sheetHorizontal),
                 itemCount: _folders.length,
                 separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.spacing3),
                 itemBuilder: (context, index) {
@@ -236,8 +228,8 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                       });
                     },
                     child: Container(
-                      width: 32,
-                      height: 32,
+                      width: AppSizes.colorSwatch,
+                      height: AppSizes.colorSwatch,
                       decoration: BoxDecoration(
                         color: parsed,
                         shape: BoxShape.circle,

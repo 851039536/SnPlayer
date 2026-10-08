@@ -66,7 +66,7 @@ class PlayerProgressBar extends StatelessWidget {
                       Text(
                         _formatDuration(position),
                         style: const TextStyle(
-                          color: Colors.white70,
+                          color: AppColors.playerOnSurface,
                           fontSize: AppFontSize.xs,
                           fontWeight: FontWeight.w500,
                         ),
@@ -74,7 +74,7 @@ class PlayerProgressBar extends StatelessWidget {
                       Text(
                         _formatDuration(duration),
                         style: const TextStyle(
-                          color: Colors.white54,
+                          color: AppColors.playerOnSurfaceMuted,
                           fontSize: AppFontSize.xs,
                           fontWeight: FontWeight.w500,
                         ),
@@ -142,7 +142,7 @@ class _BufferedSliderState extends State<_BufferedSlider> {
               Container(
                 height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
+                  color: AppColors.playerTrack,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -172,6 +172,8 @@ class _BufferedSliderState extends State<_BufferedSlider> {
                   ),
                 ),
               ),
+              // 触摸热区：轨道视觉上只有 4px，但点击/拖动需要更宽松的命中范围
+              // （Material 建议 ≥48px；此处 40px 与上下按钮留白配合，避免误触）
               SizedBox(
                 height: 40,
                 width: constraints.maxWidth,
@@ -200,7 +202,7 @@ class _BufferedSliderState extends State<_BufferedSlider> {
           child: Container(
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
+              color: AppColors.playerBuffered,
               borderRadius: BorderRadius.circular(2),
             ),
           ),

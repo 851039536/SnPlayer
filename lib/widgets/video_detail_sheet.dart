@@ -9,6 +9,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_radius.dart';
 import '../theme/app_sizes.dart';
 import '../theme/app_spacing.dart';
+import 'sheet_handle.dart';
 
 /// 视频详细信息底部弹窗
 class VideoDetailSheet {
@@ -48,24 +49,16 @@ class VideoDetailSheet {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // 拖拽指示条
-                  Center(
-                    child: Container(
-                      margin: const EdgeInsets.only(
-                        top: AppSpacing.spacing2, bottom: AppSpacing.spacing2),
-                      width: 32,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: colorScheme.onSurfaceVariant
-                            .withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
+                  const SheetHandle(
+                    topPadding: AppSpacing.spacing2,
+                    bottomPadding: AppSpacing.spacing2,
                   ),
 
                   // 标题区
                   Padding(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.spacing6, vertical: AppSpacing.spacing2),
+                      horizontal: AppSpacing.sheetHorizontal,
+                      vertical: AppSpacing.spacing3),
                     child: Row(
                       children: [
                         Container(
@@ -161,7 +154,7 @@ class VideoDetailSheet {
 
     return Padding(
       padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.spacing6,
+        horizontal: AppSpacing.sheetHorizontal,
         vertical: AppSpacing.spacing3,
       ),
       child: Row(
