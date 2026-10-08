@@ -69,8 +69,8 @@ class VideoDetailSheet {
                     child: Row(
                       children: [
                         Container(
-                          width: 40,
-                          height: 40,
+                          width: AppSizes.iconXxl,
+                          height: AppSizes.iconXxl,
                           decoration: BoxDecoration(
                             color: AppColors.brand.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(AppRadius.lg),

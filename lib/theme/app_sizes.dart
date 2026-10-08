@@ -34,4 +34,15 @@ class AppSizes {
 
   /// 44px — 标准图标按钮容器/播放器主按钮
   static const double iconButtonMd = 44.0;
+
+  // ── 视频网格布局 ──
+
+  /// 视频网格列数
+  ///
+  /// 单一来源：滚动估算与 SliverGrid 必须共用，否则可见区计算会与
+  /// 实际布局错位导致缩略图加载到错误的视频。
+  static const int gridCrossAxisCount = 2;
+
+  /// 视频卡片宽高比（1.0 = 正方形）
+  static const double videoCardAspectRatio = 1.0;
 }

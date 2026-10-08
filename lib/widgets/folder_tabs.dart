@@ -34,32 +34,35 @@ class FolderTabs extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: ListView(
+            child: ListView.builder(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.spacing4),
-              children: [
-                // "全部" 标签
-                _buildTab(
-                  context,
-                  label: '全部',
-                  isSelected: selectedFolder == null,
-                  color: colorScheme.primary,
-                  onTap: () => onSelect(null),
-                ),
-
-                // 文件夹标签
-                ...folders.map((folder) {
-                  final color = ColorUtils.parseHexColor(folder.color) ?? colorScheme.primary;
+              // 第 0 项为"全部"，其余为文件夹（惰性构建，避免文件夹多时全量创建）
+              itemCount: folders.length + 1,
+              itemBuilder: (context, index) {
+                if (index == 0) {
                   return _buildTab(
                     context,
-                    label: folder.displayName,
-                    isSelected: selectedFolder == folder.name,
-                    color: color,
-                    onTap: () => onSelect(folder.name),
-                    onLongPress: onManage,
+                    label: '全部',
+                    isSelected: selectedFolder == null,
+                    color: colorScheme.primary,
+                    onTap: () => onSelect(null),
                   );
-                }),
-              ],
+                }
+
+                final folder = folders[index - 1];
+                final color = ColorUtils.parseHexColor(folder.color) ?? colorScheme.primary;
+                return _buildTab(
+                  // key 保证标签在增删/排序变化时保持元素身份
+                  key: ValueKey(folder.name),
+                  context,
+                  label: folder.displayName,
+                  isSelected: selectedFolder == folder.name,
+                  color: color,
+                  onTap: () => onSelect(folder.name),
+                  onLongPress: onManage,
+                );
+              },
             ),
           ),
 
@@ -84,6 +87,7 @@ class FolderTabs extends StatelessWidget {
 
   Widget _buildTab(
     BuildContext context, {
+    Key? key,
     required String label,
     required bool isSelected,
     required Color color,
@@ -93,6 +97,7 @@ class FolderTabs extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return GestureDetector(
+      key: key,
       onTap: onTap,
       onLongPress: onLongPress,
       child: Container(

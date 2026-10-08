@@ -32,6 +32,21 @@ class VideoListProvider extends ChangeNotifier {
   int _missingThumbnailTotal = 0;
   int _missingThumbnailProcessed = 0;
 
+  /// 正在解密中的缩略图 id 集合（可见区加载与后台队列共享）
+  ///
+  /// 滚动会高频重复请求同一区间，无此去重会导致同一视频被并发重复解密。
+  final Set<String> _thumbnailInFlight = {};
+
+  /// 筛选结果缓存：folderName -> 该文件夹下的视频列表
+  ///
+  /// 避免每次 build 都 `.toList()` 产生新列表实例（会让 SliverGrid 每帧重建）。
+  /// key 用 [String?] 表示根目录（null）。
+  final Map<String?, List<VideoItem>> _folderCache = {};
+
+  /// 缓存版本号：[_videos] 或视频的 folderName 变化时自增，用于让 [_folderCache] 失效
+  int _folderCacheVersion = 0;
+  int _folderCacheBuiltVersion = -1;
+
   // --- 公开 getters ---
 
   List<VideoItem> get videos => _videos;
@@ -60,6 +75,7 @@ class VideoListProvider extends ChangeNotifier {
     }
 
     _videos = await StorageService.scanEncryptedVideos();
+    _invalidateFolderCache();
     notifyListeners();
   }
 
@@ -77,11 +93,40 @@ class VideoListProvider extends ChangeNotifier {
   }
 
   /// 获取指定文件夹下的视频
+  ///
+  /// 结果按文件夹缓存，仅在 [_videos] 或文件夹归属变化后重建，
+  /// 保证同一筛选条件下返回**同一列表实例**（SliverGrid 据此避免无谓重建）。
   List<VideoItem> getVideosInFolder(String? folderName) {
+    if (_folderCacheBuiltVersion != _folderCacheVersion) {
+      _folderCache.clear();
+      _folderCacheBuiltVersion = _folderCacheVersion;
+    }
+
+    // 根目录（null）直接复用原列表，避免无谓复制
     if (folderName == null) {
       return _videos;
     }
-    return _videos.where((v) => v.folderName == folderName).toList();
+
+    final cached = _folderCache[folderName];
+    if (cached != null) {
+      return cached;
+    }
+
+    final filtered = _videos.where((v) => v.folderName == folderName).toList();
+    _folderCache[folderName] = filtered;
+    return filtered;
+  }
+
+  /// 让筛选缓存失效（列表内容或视频归属变化后必须调用）
+  void _invalidateFolderCache() {
+    _folderCacheVersion++;
+  }
+
+  /// 直接注入视频列表（仅供单元测试使用）
+  @visibleForTesting
+  void debugSetVideos(List<VideoItem> videos) {
+    _videos = videos;
+    _invalidateFolderCache();
   }
 
   /// 选择要加密的视频文件，返回路径列表（空列表 = 用户取消）
@@ -209,7 +254,9 @@ class VideoListProvider extends ChangeNotifier {
         }
       }
       video.thumbCachePath = null;
+      _thumbnailInFlight.remove(video.id);
       _videos.removeWhere((v) => v.id == video.id);
+      _invalidateFolderCache();
       notifyListeners();
     }
     return success;
@@ -231,6 +278,8 @@ class VideoListProvider extends ChangeNotifier {
     final success = await StorageService.moveVideo(video, targetFolder);
     if (success) {
       video.folderName = targetFolder;
+      // 归属变化影响筛选结果
+      _invalidateFolderCache();
       notifyListeners();
     }
     return success;
@@ -252,10 +301,7 @@ class VideoListProvider extends ChangeNotifier {
       await Future.wait(
         batch.map((video) async {
           try {
-            video.thumbCachePath = await Future.any([
-              ThumbnailService.decryptThumbnailToCache(video.id, video.thumbPath, cacheDir),
-              Future.delayed(const Duration(seconds: 5), () => null),
-            ]);
+            await _decryptThumbnailDeduped(video, cacheDir);
 
             // 收集缺失 .tenc 的视频，稍后后台逐条生成
             if (video.thumbCachePath == null && !await File(video.thumbPath).exists()) {
@@ -288,35 +334,74 @@ class VideoListProvider extends ChangeNotifier {
     _missingThumbnails.clear();
   }
 
+  /// 解密单个视频的缩略图到磁盘缓存（带去重与超时）
+  ///
+  /// 同一视频并发调用时只有第一个会真正解密，其余直接复用其结果。
+  /// 返回解密后的缓存路径（失败返回 null）。
+  Future<String?> _decryptThumbnailDeduped(
+    VideoItem video,
+    String cacheDir,
+  ) {
+    // 已就绪：直接返回
+    if (video.thumbCachePath != null) {
+      return Future.value(video.thumbCachePath);
+    }
+    // 已在解密中：跳过，避免重复解密同一视频
+    if (!_thumbnailInFlight.add(video.id)) {
+      return Future.value(null);
+    }
+
+    return Future.any([
+      ThumbnailService.decryptThumbnailToCache(video.id, video.thumbPath, cacheDir),
+      Future.delayed(const Duration(seconds: 5), () => null),
+    ]).then((path) {
+      video.thumbCachePath = path;
+      return path;
+    }).whenComplete(() {
+      _thumbnailInFlight.remove(video.id);
+    });
+  }
+
   /// 按可见范围加载缩略图（可视区懒加载）
   ///
-  /// 仅加载 [startIndex] 到 [endIndex] 范围内尚未缓存的视频缩略图，
-  /// Flutter 内置 ImageCache 负责离屏缩略图的 LRU 淘汰
-  Future<void> loadVisibleThumbnails(int startIndex, int endIndex) async {
+  /// [visibleVideos] 必须是网格**实际渲染**的那份列表（即
+  /// [getVideosInFolder] 的结果），不能传入全量列表：
+  /// 选中文件夹时全量列表与筛选列表索引不一致，会导致加载错位。
+  /// Flutter 内置 ImageCache 负责离屏缩略图的 LRU 淘汰。
+  Future<void> loadVisibleThumbnails(
+    List<VideoItem> visibleVideos,
+    int startIndex,
+    int endIndex,
+  ) async {
     final cacheDir = await PathProviderService.getThumbCacheDir();
-    final range = endIndex.clamp(0, _videos.length);
+    final start = startIndex.clamp(0, visibleVideos.length);
+    final end = endIndex.clamp(0, visibleVideos.length);
+    bool changed = false;
 
-    for (int i = startIndex; i < range; i++) {
+    for (int i = start; i < end; i++) {
       if (_thumbnailToken.isCancelled) { break; }
-      final video = _videos[i];
+      final video = visibleVideos[i];
       if (video.thumbCachePath != null) { continue; }
 
       try {
-        video.thumbCachePath = await Future.any([
-          ThumbnailService.decryptThumbnailToCache(video.id, video.thumbPath, cacheDir),
-          Future.delayed(const Duration(seconds: 5), () => null),
-        ]);
+        final path = await _decryptThumbnailDeduped(video, cacheDir);
+        if (path != null) { changed = true; }
       } catch (e) {
         debugPrint('[SnPlayer] VideoListProvider.loadVisibleThumbnails: $e');
       }
 
       if (i % thumbnailBatchSize == 0) {
-        notifyListeners();
+        if (changed) {
+          notifyListeners();
+          changed = false;
+        }
         await Future.delayed(Duration.zero);
       }
     }
 
-    notifyListeners();
+    if (changed) {
+      notifyListeners();
+    }
   }
 
   /// 后台生成缺失的缩略图（不阻塞 UI）
@@ -338,6 +423,13 @@ class VideoListProvider extends ChangeNotifier {
       for (final video in queue) {
         if (_thumbnailToken.isCancelled) { break; }
 
+        // 可见区加载可能已就绪或正在解密同一视频：跳过，避免重复重解密
+        if (video.thumbCachePath != null || !_thumbnailInFlight.add(video.id)) {
+          completedCount++;
+          _missingThumbnailProcessed = completedCount;
+          continue;
+        }
+
         final shortId = video.id.length > 8 ? video.id.substring(0, 8) : video.id;
         debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId]');
 
@@ -352,6 +444,8 @@ class VideoListProvider extends ChangeNotifier {
           }
         } catch (e) {
           debugPrint('[SnPlayer] VideoListProvider: 后台缩略图 [$shortId] 异常: $e');
+        } finally {
+          _thumbnailInFlight.remove(video.id);
         }
 
         completedCount++;
@@ -398,6 +492,7 @@ class VideoListProvider extends ChangeNotifier {
     for (final video in _videos) {
       video.thumbCachePath = null;
     }
+    _thumbnailInFlight.clear();
 
     // 4. 清除 Flutter 内存 ImageCache：缩略图缓存文件名固定（按 videoId），
     // 删除磁盘文件后若不清内存缓存，重新生成同名文件时 Image.file 会命中

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../models/video_item.dart';
 import '../providers/video_list_provider.dart';
 import '../providers/folder_provider.dart';
 import '../services/permission_service.dart';
@@ -39,8 +40,23 @@ class _VideoListScreenState extends State<VideoListScreen> {
   final ScrollController _scrollController = ScrollController();
   static const int _preloadRows = 2; // 上下各预加载 2 行
 
+  /// 滚动防抖计时器（避免每帧触发缩略图加载）
+  Timer? _scrollDebounce;
+
+  /// 上次已请求的区间与筛选条件，用于跳过重复请求
+  int _lastRangeStart = -1;
+  int _lastRangeEnd = -1;
+  String? _lastFolderKey;
+  bool _lastFolderKeySet = false;
+
   /// 卡片操作分发器（含第三方播放的流式代理，dispose 时停止）
   final VideoActionsHandler _actions = VideoActionsHandler();
+
+  /// 缓存的 Provider 引用
+  ///
+  /// dispose() 中不能再通过 context 查找祖先 Provider（元素树已失活，会抛
+  /// "Looking up a deactivated widget's ancestor is unsafe"），故在此预先缓存。
+  VideoListProvider? _videoProvider;
 
   @override
   void initState() {
@@ -49,18 +65,54 @@ class _VideoListScreenState extends State<VideoListScreen> {
     _initApp();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _videoProvider = context.read<VideoListProvider>();
+  }
+
+  /// 滚动监听：防抖后计算可见区间并请求缩略图
+  ///
+  /// 每帧直接触发会让同一区间被重复请求（导致同一视频并发重复解密），
+  /// 故用 [_scrollDebounce] 合并连续滚动事件。
   void _onScroll() {
+    _scrollDebounce?.cancel();
+    _scrollDebounce = Timer(
+      const Duration(milliseconds: 80),
+      _loadThumbnailsForVisibleRange,
+    );
+  }
+
+  /// 重置可见区间跟踪（列表内容变化后必须调用，否则去重会跳过应有的加载）
+  void _resetVisibleRangeTracking() {
+    _lastRangeStart = -1;
+    _lastRangeEnd = -1;
+    _lastFolderKeySet = false;
+    _lastFolderKey = null;
+  }
+
+  /// 计算可见区间并请求缩略图
+  ///
+  /// 关键：区间索引必须基于**网格实际渲染的列表**（[getVideosInFolder]），
+  /// 否则选中文件夹时索引会与全量列表错位，导致加载到错误的视频缩略图。
+  void _loadThumbnailsForVisibleRange() {
+    if (!mounted) { return; }
     final provider = context.read<VideoListProvider>();
-    final videos = provider.videos;
+    final folderProvider = context.read<FolderProvider>();
+    final selectedFolder = folderProvider.selectedFolder;
+    final videos = provider.getVideosInFolder(selectedFolder);
     if (videos.isEmpty) { return; }
 
-    const crossAxisCount = 2;
+    const crossAxisCount = AppSizes.gridCrossAxisCount;
     // 估算每项高度：网格宽度 / 列数 * aspectRatio
     final screenWidth = MediaQuery.of(context).size.width;
     const padding = AppSpacing.spacing4 * 2; // grid padding left+right
     const spacing = AppSpacing.spacing3 * (crossAxisCount - 1);
     final itemWidth = (screenWidth - padding - spacing) / crossAxisCount;
-    final itemHeight = itemWidth; // childAspectRatio: 1.0
+    // 与 SliverGrid 的 childAspectRatio 保持一致（1.0 时高度=宽度）
+    final itemHeight = AppSizes.videoCardAspectRatio == 0
+        ? itemWidth
+        : itemWidth / AppSizes.videoCardAspectRatio;
 
     final scrollOffset = _scrollController.offset;
     final viewportHeight = _scrollController.position.viewportDimension;
@@ -72,11 +124,25 @@ class _VideoListScreenState extends State<VideoListScreen> {
     final visibleRows = (viewportHeight / rowHeight).ceil() + 1; // +1 容错
 
     final firstVisible = ((firstVisibleRow - _preloadRows).clamp(0, double.infinity) * itemsPerRow).toInt();
-    final lastVisible = ((firstVisibleRow + visibleRows + _preloadRows) * itemsPerRow).toInt().clamp(0, videos.length);
+    final lastVisible = ((firstVisibleRow + visibleRows + _preloadRows) * itemsPerRow)
+        .toInt()
+        .clamp(0, videos.length); // clamp 到筛选后长度，而非全量长度
 
-    if (firstVisible < lastVisible) {
-      provider.loadVisibleThumbnails(firstVisible, lastVisible);
+    if (firstVisible >= lastVisible) { return; }
+
+    // 区间与筛选条件均未变化：跳过重复请求
+    if (_lastFolderKeySet &&
+        _lastFolderKey == selectedFolder &&
+        _lastRangeStart == firstVisible &&
+        _lastRangeEnd == lastVisible) {
+      return;
     }
+    _lastFolderKeySet = true;
+    _lastFolderKey = selectedFolder;
+    _lastRangeStart = firstVisible;
+    _lastRangeEnd = lastVisible;
+
+    unawaited(provider.loadVisibleThumbnails(videos, firstVisible, lastVisible));
   }
 
   Future<void> _initApp() async {
@@ -105,13 +171,20 @@ class _VideoListScreenState extends State<VideoListScreen> {
     }
     unawaited(videoProvider.loadThumbnails());
     unawaited(videoProvider.cleanupExpiredThumbnails()); // 后台清理过期缓存
+
+    // 首屏可见区缩略图（loadThumbnails 之外的兜底，确保当前视口优先）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) { _loadThumbnailsForVisibleRange(); }
+    });
   }
 
   @override
   void dispose() {
+    _scrollDebounce?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
-    context.read<VideoListProvider>().cancelThumbnailLoading();
+    // 用缓存的引用，避免在 dispose 中查找已失活的祖先 Provider
+    _videoProvider?.cancelThumbnailLoading();
     // 停止第三方播放器的流式解密代理
     unawaited(_actions.dispose());
     super.dispose();
@@ -181,6 +254,9 @@ class _VideoListScreenState extends State<VideoListScreen> {
       body: RefreshIndicator(
         onRefresh: () async {
           await context.read<VideoListProvider>().loadVideos();
+          // 列表内容已变，重置区间跟踪并重新加载可见区缩略图
+          _resetVisibleRangeTracking();
+          if (mounted) { _loadThumbnailsForVisibleRange(); }
         },
         child: CustomScrollView(
           controller: _scrollController,
@@ -237,6 +313,11 @@ class _VideoListScreenState extends State<VideoListScreen> {
           selectedFolder: folderProvider.selectedFolder,
           onSelect: (folderName) {
             folderProvider.selectFolder(folderName);
+            // 切换筛选后列表内容变化，需重新计算可见区间缩略图
+            _resetVisibleRangeTracking();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) { _loadThumbnailsForVisibleRange(); }
+            });
           },
           onManage: () => _showFolderManagement(folderProvider),
         );
@@ -245,12 +326,13 @@ class _VideoListScreenState extends State<VideoListScreen> {
   }
 
   Widget _buildVideoGrid() {
-    return Consumer2<VideoListProvider, FolderProvider>(
-      builder: (context, videoProvider, folderProvider, _) {
-        final allVideos = videoProvider.getVideosInFolder(
-          folderProvider.selectedFolder,
-        );
-
+    // 仅订阅"当前筛选下的视频列表"这一项：
+    // 缩略图就绪会高频 notifyListeners，若用 Consumer2 包整个 sliver，
+    // 每次通知都会重建整个网格。Selector 只在列表身份变化时才重建。
+    return Selector2<VideoListProvider, FolderProvider, List<VideoItem>>(
+      selector: (_, videoProvider, folderProvider) =>
+          videoProvider.getVideosInFolder(folderProvider.selectedFolder),
+      builder: (context, allVideos, _) {
         if (allVideos.isEmpty) {
           return SliverFillRemaining(
             child: Center(
@@ -286,20 +368,20 @@ class _VideoListScreenState extends State<VideoListScreen> {
               AppSpacing.spacing4, AppSpacing.spacing4, AppSpacing.spacing4, AppSpacing.spacing4),
           sliver: SliverGrid(
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
+              crossAxisCount: AppSizes.gridCrossAxisCount,
               mainAxisSpacing: AppSpacing.spacing2,
               crossAxisSpacing: AppSpacing.spacing2,
-              childAspectRatio: 1.0,
+              childAspectRatio: AppSizes.videoCardAspectRatio,
             ),
             delegate: SliverChildBuilderDelegate(
               (context, index) {
                 final video = allVideos[index];
-                return VideoCard(
+                return _VideoCardSlot(
+                  // key 保证卡片在列表增删时保持元素身份，避免不必要重建
+                  key: ValueKey(video.id),
                   video: video,
-                  processingState: videoProvider.processingState[video.id],
-                  onTap: () {
-                    _actions.showActions(context, video, videoProvider);
-                  },
+                  onTap: () => _actions.showActions(context, video,
+                      context.read<VideoListProvider>()),
                 );
               },
               childCount: allVideos.length,
@@ -493,6 +575,7 @@ class _VideoListScreenState extends State<VideoListScreen> {
     }
 
     // 重新加载缩略图
+    _resetVisibleRangeTracking();
     unawaited(videoProvider.loadThumbnails());
 
     if (mounted) {
@@ -508,5 +591,37 @@ class _VideoListScreenState extends State<VideoListScreen> {
         ),
       );
     }
+  }
+}
+
+/// 单个视频卡片槽位
+///
+/// 只订阅"本视频的缩略图路径 + 处理状态"，使缩略图就绪的高频通知
+/// 仅重建对应卡片，而非整个网格。外层的 [Selector2] 负责列表增删/筛选变化。
+class _VideoCardSlot extends StatelessWidget {
+  final VideoItem video;
+  final VoidCallback onTap;
+
+  const _VideoCardSlot({
+    super.key,
+    required this.video,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Selector<VideoListProvider, ({String? thumb, String? state})>(
+      selector: (_, provider) => (
+        thumb: video.thumbCachePath,
+        state: provider.processingState[video.id],
+      ),
+      builder: (context, data, _) {
+        return VideoCard(
+          video: video,
+          processingState: data.state,
+          onTap: onTap,
+        );
+      },
+    );
   }
 }

@@ -36,83 +36,90 @@ class VideoCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 缩略图区域（自动填充剩余空间）
+            // 缩略图区域：固定 16:9，不再用 Expanded 抢占剩余高度
+            // （Expanded + AspectRatio 在正方形网格单元内会互相争夺高度导致布局冲突）
             _buildThumbnail(colorScheme),
-            // 信息区域
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.spacing2, AppSpacing.spacing2, AppSpacing.spacing2, AppSpacing.spacing1),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 标题
-                  Text(
-                    video.displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w500,
-                        ),
-                  ),
-                  const SizedBox(height: AppSpacing.spacing1),
-                  // 文件大小 + 时间
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.movie_outlined,
-                        size: AppSizes.iconSm,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: AppSpacing.spacing1),
-                      Expanded(
-                        child: Text(
-                          video.formattedSize,
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (processingState != null) ...[
-                        const SizedBox(width: AppSpacing.spacing1),
-                        _ProcessingBadge(state: processingState!),
-                      ],
-                    ],
-                  ),
-                  if (video.folderName != null) ...[
-                    const SizedBox(height: AppSpacing.spacing1),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.spacing2, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: colorScheme.secondaryContainer
-                            .withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(AppRadius.sm),
-                      ),
-                      child: Text(
-                        video.folderName!,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: colorScheme.onSecondaryContainer,
-                            ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
+            // 信息区域：占据剩余高度，超长内容裁切而非溢出报错
+            Expanded(child: _buildInfo(context, colorScheme)),
           ],
         ),
       ),
     );
   }
 
+  /// 信息区域（标题 / 文件大小 / 文件夹标签）
+  Widget _buildInfo(BuildContext context, ColorScheme colorScheme) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.spacing2, AppSpacing.spacing2, AppSpacing.spacing2, AppSpacing.spacing1),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 标题
+          Text(
+            video.displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+          ),
+          const SizedBox(height: AppSpacing.spacing1),
+          // 文件大小 + 处理状态
+          Row(
+            children: [
+              Icon(
+                Icons.movie_outlined,
+                size: AppSizes.iconSm,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: AppSpacing.spacing1),
+              Expanded(
+                child: Text(
+                  video.formattedSize,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (processingState != null) ...[
+                const SizedBox(width: AppSpacing.spacing1),
+                _ProcessingBadge(state: processingState!),
+              ],
+            ],
+          ),
+          if (video.folderName != null) ...[
+            const SizedBox(height: AppSpacing.spacing1),
+            // 标签超长时省略，避免撑破卡片
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.spacing2, vertical: 2),
+              decoration: BoxDecoration(
+                color: colorScheme.secondaryContainer.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+              ),
+              child: Text(
+                video.folderName!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: colorScheme.onSecondaryContainer,
+                    ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildThumbnail(ColorScheme colorScheme) {
-    return Expanded(
-      child: AspectRatio(
-        aspectRatio: 16 / 9,
-        child: Stack(
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: Stack(
         fit: StackFit.expand,
         children: [
           // 磁盘缓存缩略图或占位符
@@ -139,7 +146,7 @@ class VideoCard extends StatelessWidget {
                   color: Colors.black54,
                   borderRadius: BorderRadius.circular(AppSizes.iconButtonMd / 2),
                 ),
-                child: Icon(
+                child: const Icon(
                   Icons.play_arrow_rounded,
                   color: Colors.white,
                   size: AppSizes.iconXl,
@@ -149,9 +156,8 @@ class VideoCard extends StatelessWidget {
           ),
         ],
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildPlaceholder(ColorScheme colorScheme) {
     return Container(
