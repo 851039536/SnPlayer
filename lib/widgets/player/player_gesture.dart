@@ -6,7 +6,6 @@ import 'package:video_player/video_player.dart';
 import '../../theme/app_duration.dart';
 import '../../theme/app_font_size.dart';
 import '../../theme/app_radius.dart';
-import '../../theme/app_sizes.dart';
 import '../../theme/app_spacing.dart';
 import '../../utils/file_utils.dart';
 
@@ -287,15 +286,5 @@ class _PlayerGestureState extends State<PlayerGesture> {
           ),
       ],
     );
-  }
-
-  String _formatDuration(Duration d) {
-    final hours = d.inHours;
-    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    if (hours > 0) {
-      return '$hours:${minutes.padLeft(2, '0')}:$seconds';
-    }
-    return '$minutes:$seconds';
   }
 }
