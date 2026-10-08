@@ -430,11 +430,18 @@ class _VideoListScreenState extends State<VideoListScreen> {
       context,
       folders: folderDataList,
       onCreate: (displayName, color) async {
-        final result = await folderProvider.createFolder(displayName, color);
-        if (result) {
-          await videoProvider.loadVideos();
-        }
-        return result;
+        final created = await folderProvider.createFolder(displayName, color);
+        if (created == null) { return null; }
+        await videoProvider.loadVideos();
+        final count = videoProvider.videos
+            .where((v) => v.folderName == created.name)
+            .length;
+        return FolderData(
+          name: created.name,
+          displayName: created.displayName,
+          color: created.color,
+          videoCount: count,
+        );
       },
       onRename: (folderName, newName) async {
         return await folderProvider.renameFolder(folderName, newName);

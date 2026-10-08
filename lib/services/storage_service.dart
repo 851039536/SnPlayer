@@ -1,5 +1,6 @@
 // lib/services/storage_service.dart — 文件存储管理（目录/扫描/命名/移动重命名/文件夹元数据/存储统计）
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,11 +13,47 @@ import '../models/video_folder.dart';
 import '../config/crypto.dart';
 import 'path_provider_service.dart';
 
+/// 删除文件夹的结果
+///
+/// 区分"非空被拒"与"元数据保存失败"两种失败原因，供 UI 给出准确提示。
+enum DeleteFolderResult {
+  /// 删除成功
+  success,
+
+  /// 文件夹非空，拒绝删除
+  notEmpty,
+
+  /// 文件夹不存在（元数据与磁盘均无）
+  notFound,
+
+  /// 元数据保存失败，未做任何删除
+  saveFailed,
+}
+
 /// 文件存储管理服务
 ///
 /// 管理加密视频的目录结构、文件命名、元数据持久化
 /// 负责扫描 .enc 文件并构建 VideoItem 模型
 class StorageService {
+  /// 元数据变更串行队列（互斥锁）
+  ///
+  /// 文件夹元数据操作均为 load → 改 → save 的读改写序列，无锁并发时会互相
+  /// 覆盖导致丢数据。所有涉及元数据写入的操作都经 [_runExclusive] 排队执行。
+  static Future<void> _mutationQueue = Future<void>.value();
+
+  /// 串行执行一个元数据变更操作
+  static Future<T> _runExclusive<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _mutationQueue = _mutationQueue.then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (e, s) {
+        completer.completeError(e, s);
+      }
+    });
+    return completer.future;
+  }
+
   /// 初始化所有必需的目录
   static Future<void> initDirectories() async {
     final lockDir = Directory(await PathProviderService.getLockVideoDir());
@@ -262,83 +299,129 @@ class StorageService {
     }
   }
 
+  /// 在互斥队列中执行一次"读取最新元数据 → 修改 → 保存"操作
+  ///
+  /// [mutator] 直接修改传入的列表并返回 true 表示需要保存；返回 false 则跳过保存。
+  /// 供 FolderProvider 等上层复用，保证与 createFolder/deleteFolder 之间的串行性。
+  static Future<bool> mutateFolders(
+    Future<bool> Function(List<VideoFolder> folders) mutator,
+  ) {
+    return _runExclusive(() async {
+      try {
+        final folders = await loadFolders();
+        final shouldSave = await mutator(folders);
+        if (!shouldSave) { return false; }
+        return await saveFolders(folders);
+      } catch (e) {
+        debugPrint('[SnPlayer] StorageService.mutateFolders: $e');
+        return false;
+      }
+    });
+  }
+
   /// 创建文件夹（物理目录 + 元数据）
   static Future<VideoFolder?> createFolder(String displayName, String color) async {
-    try {
-      final now = DateTime.now();
-      final timestamp = _formatTimestamp(now);
-      final uuid = _generateShortUuid();
-      final folderName = 'folder_${timestamp}_$uuid';
+    return _runExclusive(() async {
+      try {
+        final now = DateTime.now();
+        final timestamp = _formatTimestamp(now);
+        final uuid = _generateShortUuid();
+        final folderName = 'folder_${timestamp}_$uuid';
 
-      // 创建物理目录
-      final lockDir = await PathProviderService.getLockVideoDir();
-      final folderDir = Directory(p.join(lockDir, folderName));
-      await folderDir.create();
+        // 创建物理目录
+        final lockDir = await PathProviderService.getLockVideoDir();
+        final folderDir = Directory(p.join(lockDir, folderName));
+        await folderDir.create();
 
-      final folder = VideoFolder(
-        name: folderName,
-        displayName: displayName,
-        color: color,
-      );
+        final folder = VideoFolder(
+          name: folderName,
+          displayName: displayName,
+          color: color,
+        );
 
-      // 更新元数据；保存失败则回滚刚创建的物理目录，避免磁盘元数据与
-      // 内存状态分叉（否则重启后该文件夹会"消失"但空目录残留）
-      final folders = await loadFolders();
-      folders.add(folder);
-      final saved = await saveFolders(folders);
-      if (!saved) {
-        try {
-          await folderDir.delete();
-        } catch (_) {
-          // 回滚删除失败：留下空目录，无元数据不显示为标签，不影响正确性
+        // 更新元数据；保存失败则回滚刚创建的物理目录，避免磁盘元数据与
+        // 内存状态分叉（否则重启后该文件夹会"消失"但空目录残留）
+        final folders = await loadFolders();
+        folders.add(folder);
+        final saved = await saveFolders(folders);
+        if (!saved) {
+          try {
+            await folderDir.delete();
+          } catch (_) {
+            // 回滚删除失败：留下空目录，无元数据不显示为标签，不影响正确性
+          }
+          return null;
         }
+
+        return folder;
+      } catch (e) {
+        debugPrint('[SnPlayer] StorageService.createFolder: $e');
         return null;
       }
-
-      return folder;
-    } catch (e) {
-      debugPrint('[SnPlayer] StorageService.createFolder: $e');
-      return null;
-    }
+    });
   }
 
   /// 删除文件夹（物理目录 + 元数据）
-  static Future<bool> deleteFolder(String folderName) async {
-    try {
-      final lockDir = await PathProviderService.getLockVideoDir();
-      final folderDir = Directory(p.join(lockDir, folderName));
+  ///
+  /// 返回具体结果而非 bool，便于 UI 区分"非空拒删"与"保存失败"。
+  static Future<DeleteFolderResult> deleteFolder(String folderName) async {
+    return _runExclusive(() async {
+      try {
+        final lockDir = await PathProviderService.getLockVideoDir();
+        final folderDir = Directory(p.join(lockDir, folderName));
 
-      final exists = await folderDir.exists();
-      if (exists) {
-        // 检查文件夹是否为空（非空拒绝，防止误删其中的视频）
-        final contents = await folderDir.list().toList();
-        if (contents.isNotEmpty) {
-          return false;
+        final exists = await folderDir.exists();
+        if (exists) {
+          // 检查文件夹是否为空（非空拒绝，防止误删其中的视频）
+          final contents = await folderDir.list().toList();
+          if (contents.isNotEmpty) {
+            return DeleteFolderResult.notEmpty;
+          }
         }
-      }
 
-      // 先持久化元数据：保存失败则不删物理目录，返回 false 保持内存与磁盘一致
-      final folders = await loadFolders();
-      folders.removeWhere((f) => f.name == folderName);
-      final saved = await saveFolders(folders);
-      if (!saved) {
-        return false;
-      }
+        // 先持久化元数据：保存失败则不删物理目录，保持内存与磁盘一致
+        final folders = await loadFolders();
+        final removed = folders.indexWhere((f) => f.name == folderName);
 
-      // 元数据已落盘，再删空物理目录（失败仅残留空目录，无碍正确性）
-      if (exists) {
-        try {
-          await folderDir.delete();
-        } catch (e) {
-          debugPrint('[SnPlayer] StorageService.deleteFolder: 删除物理目录失败: $e');
+        // 元数据与磁盘均无此文件夹
+        if (!exists && removed == -1) {
+          return DeleteFolderResult.notFound;
         }
-      }
 
-      return true;
-    } catch (e) {
-      debugPrint('[SnPlayer] StorageService.deleteFolder: $e');
-      return false;
-    }
+        // 保留原条目以便复检失败时原样回滚（不丢失显示名与颜色）
+        final removedFolder = removed == -1 ? null : folders[removed];
+        folders.removeWhere((f) => f.name == folderName);
+
+        final saved = await saveFolders(folders);
+        if (!saved) {
+          return DeleteFolderResult.saveFailed;
+        }
+
+        // 元数据已落盘，再删空物理目录（失败仅残留空目录，无碍正确性）
+        if (exists) {
+          // 删除前复检：若期间有视频被移入，则回滚元数据并报非空，
+          // 避免标签消失却留下无法访问的孤儿视频
+          final recheck = await folderDir.list().toList();
+          if (recheck.isNotEmpty) {
+            if (removedFolder != null) {
+              folders.add(removedFolder);
+              await saveFolders(folders);
+            }
+            return DeleteFolderResult.notEmpty;
+          }
+          try {
+            await folderDir.delete();
+          } catch (e) {
+            debugPrint('[SnPlayer] StorageService.deleteFolder: 删除物理目录失败: $e');
+          }
+        }
+
+        return DeleteFolderResult.success;
+      } catch (e) {
+        debugPrint('[SnPlayer] StorageService.deleteFolder: $e');
+        return DeleteFolderResult.saveFailed;
+      }
+    });
   }
 
   /// 获取存储统计信息

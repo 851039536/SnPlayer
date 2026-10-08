@@ -1,0 +1,94 @@
+Review complete: 8 finding(s) across 6 selected item(s).
+
+─── lib/services/storage_service.dart:286-288 ───
+[bug · medium] `createFolder` and `deleteFolder` perform a read-modify-write on the metadata
+(loadFolders → mutate → saveFolders) without any synchronization or lock. If two folder operations
+are triggered concurrently (e.g., rapid successive deletes/creates, or a create racing a delete),
+one save can clobber the other's change, silently dropping a folder's metadata. Since this commit is
+specifically hardening metadata/disk consistency, consider serializing these mutations (e.g., a
+static `Future`-chained mutex in StorageService) so the load-modify-save window is atomic. The same
+applies to FolderProvider.renameFolder/recolorFolder which call saveFolders directly.
+
+
+
+─── lib/screens/folder_manage_screen.dart:360-365 ───
+[bug · medium] In the recolor flow, the dialog is popped unconditionally and `ok` is only used to
+update local state. When `widget.onRecolor` returns false (StorageService.saveFolders failed and the
+provider rolled back via loadFolders), the user gets no feedback at all — the color silently
+stays/returns to the old value. create/rename/delete all surface an error (inline errorText or
+SnackBar), so this path is inconsistent. Consider showing a SnackBar on failure.
+
+                  final ok = await widget.onRecolor(folder.name, color);
+                  if (!ctx.mounted) { return; }
+                  Navigator.pop(ctx);
+                  if (ok) {
+                    _replaceFolder(folder.name, color: color);
++                 } else {
++                   ScaffoldMessenger.of(context).showSnackBar(
++                     const SnackBar(content: Text('修改颜色失败，请重试')),
++                   );
+                  }
+
+
+─── lib/screens/folder_manage_screen.dart:428-430 ───
+[maintainability · low] `_isDuplicateName` compares against `f.displayName`, but in the rename
+dialog the folder being renamed is also present in `_folders`. This works only because of the
+earlier `newName == folder.displayName` early-return. However, the duplicate check ignores the
+folder's own identity: any other folder sharing the displayName blocks the rename correctly, but
+this relies on the early-return staying in place. Consider excluding `folder.name` from the
+duplicate scan to make the intent explicit and robust (e.g., pass an `excludeName`).
+
+
+
+─── lib/screens/folder_manage_screen.dart:436-444 ───
+[maintainability · low] `_replaceFolder` reconstructs `FolderData` field-by-field. `FolderData`
+currently has 4 fields so nothing is dropped today, but this manual copy is fragile: if a field is
+later added to `FolderData`, this reconstruction will silently reset it to the default and cause
+data loss in the local list. Adding a `copyWith` to `FolderData` (or reusing the existing instance
+and mutating) would be safer.
+
+
+
+─── lib/screens/folder_manage_screen.dart:64-65 ───
+[maintainability · low] `maxLength: _maxNameLength` limits the raw (untrimmed) controller text,
+while the empty/duplicate checks and the value sent to `onCreate`/`onRename` all use the trimmed
+string. A name of e.g. 20 chars plus trailing spaces is capped at 20 raw chars, but the effective
+stored length is consistent in practice — the real concern is that this 20-char limit is a magic
+number local to this file, while the requirement ('avoid breaking the tab layout') also affects
+`FolderTabs` (maxWidth 120). Consider centralizing the name-length constraint so validation and
+display constraints stay in sync.
+
+
+
+─── lib/services/storage_service.dart:320-328 ───
+[bug · low] The new ordering (save metadata first, then delete the physical dir) widens a TOCTOU
+window: the emptiness check at line 314 happens before the metadata write, and only afterwards is
+`folderDir.delete()` attempted. If a video is moved into this folder via `moveVideo` during that
+window, the metadata entry has already been removed (folder tag disappears) while the physical
+delete fails silently, leaving an orphaned video in a folder that no longer appears in the UI.
+Consider re-checking emptiness immediately before the delete (or treating a failed non-empty delete
+as a reason to restore the metadata entry). Given the single-app context this is low risk, but worth
+a guard.
+
+
+
+─── lib/screens/folder_manage_screen.dart:412-418 ───
+[bug · medium] The delete failure path always reports "无法删除非空文件夹", but `StorageService.deleteFolder`
+also returns `false` when `saveFolders` fails (i.e. a metadata persistence error) — not only when
+the directory is non-empty. In that case the feedback is misleading: the user is told the folder is
+non-empty when the real cause is a save failure. Consider differentiating the two cases (e.g. return
+an enum/result, or check emptiness on the client side before showing the message) so the SnackBar
+reflects the actual reason.
+
+
+
+─── lib/screens/folder_manage_screen.dart:271-278 ───
+[maintainability · low] The new `_folders` local copy is described as enabling in-place refresh so
+the sheet doesn't need to be reopened, and rename/recolor/delete now update it. However the create
+path still does `Navigator.pop(ctx)` then `Navigator.pop(context)` to close the whole sheet on
+success, and never adds the new folder to `_folders`. This makes create inconsistent with the other
+operations (and partly defeats the local-copy design). Consider adding the created folder to
+`_folders` in place instead of closing the sheet, for a consistent UX and to match the stated
+intent.
+
+

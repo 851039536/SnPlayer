@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../services/storage_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_radius.dart';
@@ -13,10 +14,10 @@ import '../utils/color_utils.dart';
 /// 支持创建/重命名/改色/删除文件夹
 class FolderManageSheet extends StatefulWidget {
   final List<FolderData> folders;
-  final Future<bool> Function(String displayName, String color) onCreate;
+  final Future<FolderData?> Function(String displayName, String color) onCreate;
   final Future<bool> Function(String folderName, String newName) onRename;
   final Future<bool> Function(String folderName, String color) onRecolor;
-  final Future<bool> Function(String folderName) onDelete;
+  final Future<DeleteFolderResult> Function(String folderName) onDelete;
 
   const FolderManageSheet({
     super.key,
@@ -31,10 +32,10 @@ class FolderManageSheet extends StatefulWidget {
   static Future<void> show(
     BuildContext context, {
     required List<FolderData> folders,
-    required Future<bool> Function(String displayName, String color) onCreate,
+    required Future<FolderData?> Function(String displayName, String color) onCreate,
     required Future<bool> Function(String folderName, String newName) onRename,
     required Future<bool> Function(String folderName, String color) onRecolor,
-    required Future<bool> Function(String folderName) onDelete,
+    required Future<DeleteFolderResult> Function(String folderName) onDelete,
   }) {
     return showModalBottomSheet(
       context: context,
@@ -268,11 +269,11 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                   setDialogState(() => errorText = '已存在同名文件夹');
                   return;
                 }
-                final ok = await widget.onCreate(name, selectedColor);
+                final created = await widget.onCreate(name, selectedColor);
                 if (!ctx.mounted) { return; }
-                if (ok) {
+                if (created != null) {
                   Navigator.pop(ctx);
-                  Navigator.pop(context); // 关闭 BottomSheet
+                  _addFolder(created);
                 } else {
                   setDialogState(() => errorText = '创建失败，请重试');
                 }
@@ -321,7 +322,7 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                   Navigator.pop(ctx);
                   return;
                 }
-                if (_isDuplicateName(newName)) {
+                if (_isDuplicateName(newName, excludeName: folder.name)) {
                   setDialogState(() => errorText = '已存在同名文件夹');
                   return;
                 }
@@ -362,6 +363,8 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
                 Navigator.pop(ctx);
                 if (ok) {
                   _replaceFolder(folder.name, color: color);
+                } else {
+                  _showError('修改颜色失败，请重试');
                 }
               },
               child: Container(
@@ -406,15 +409,23 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
               backgroundColor: Theme.of(context).colorScheme.error,
             ),
             onPressed: () async {
-              final ok = await widget.onDelete(folder.name);
+              final result = await widget.onDelete(folder.name);
               if (!ctx.mounted) { return; }
               Navigator.pop(ctx);
-              if (ok) {
-                _removeFolder(folder.name);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('无法删除非空文件夹')),
-                );
+              switch (result) {
+                case DeleteFolderResult.success:
+                  _removeFolder(folder.name);
+                  break;
+                case DeleteFolderResult.notEmpty:
+                  _showError('无法删除非空文件夹，请先移出其中的视频');
+                  break;
+                case DeleteFolderResult.notFound:
+                  // 已被删除：同步本地列表即可，无需报错
+                  _removeFolder(folder.name);
+                  break;
+                case DeleteFolderResult.saveFailed:
+                  _showError('删除失败：文件夹信息保存出错，请重试');
+                  break;
               }
             },
             child: const Text('删除'),
@@ -425,21 +436,30 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
   }
 
   /// 名称是否与现有文件夹重复（忽略首尾空格；用于创建与重命名查重）
-  bool _isDuplicateName(String name) {
-    return _folders.any((f) => f.displayName == name);
+  ///
+  /// [excludeName] 用于重命名场景排除文件夹自身，避免"改成同名"被误判为重复。
+  bool _isDuplicateName(String name, {String? excludeName}) {
+    return _folders.any(
+      (f) => f.name != excludeName && f.displayName == name,
+    );
+  }
+
+  /// 显示错误提示（弹窗关闭后仍可见）
+  void _showError(String message) {
+    if (!mounted) { return; }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   /// 就地替换某文件夹的显示名/颜色并刷新弹窗列表
   void _replaceFolder(String name, {String? displayName, String? color}) {
     final index = _folders.indexWhere((f) => f.name == name);
     if (index == -1) { return; }
-    final old = _folders[index];
     setState(() {
-      _folders[index] = FolderData(
-        name: old.name,
-        displayName: displayName ?? old.displayName,
-        color: color ?? old.color,
-        videoCount: old.videoCount,
+      _folders[index] = _folders[index].copyWith(
+        displayName: displayName,
+        color: color,
       );
     });
   }
@@ -448,6 +468,13 @@ class _FolderManageSheetState extends State<FolderManageSheet> {
   void _removeFolder(String name) {
     setState(() {
       _folders.removeWhere((f) => f.name == name);
+    });
+  }
+
+  /// 就地追加新建的文件夹并刷新弹窗列表（无需重开弹窗）
+  void _addFolder(FolderData folder) {
+    setState(() {
+      _folders.add(folder);
     });
   }
 
@@ -466,4 +493,21 @@ class FolderData {
     required this.color,
     this.videoCount = 0,
   });
+
+  /// 复制并覆盖部分字段
+  ///
+  /// 避免调用方逐字段重建实例：新增字段时不会因漏写而被静默重置为默认值。
+  FolderData copyWith({
+    String? name,
+    String? displayName,
+    String? color,
+    int? videoCount,
+  }) {
+    return FolderData(
+      name: name ?? this.name,
+      displayName: displayName ?? this.displayName,
+      color: color ?? this.color,
+      videoCount: videoCount ?? this.videoCount,
+    );
+  }
 }
