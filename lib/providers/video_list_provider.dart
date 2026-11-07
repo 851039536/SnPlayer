@@ -151,6 +151,20 @@ class VideoListProvider extends ChangeNotifier {
     ];
   }
 
+  /// 输出先写同目录临时文件，成功后原子 rename，避免失败/取消留下半成品
+  String _buildTempOutputPath(String outputPath) {
+    return '$outputPath.${DateTime.now().microsecondsSinceEpoch}.tmp';
+  }
+
+  /// 静默删除失败留下的临时输出
+  Future<void> _deleteTempOutputQuietly(String tempPath) async {
+    try {
+      await File(tempPath).delete();
+    } catch (_) {
+      // 临时文件可能尚未创建
+    }
+  }
+
   /// 批量加密视频文件，返回成功/失败计数
   ///
   /// 进度通过 [controller] 上报给模态进度对话框。
@@ -170,6 +184,7 @@ class VideoListProvider extends ChangeNotifier {
         fileName: baseName, current: i + 1, total: paths.length,
       );
 
+      String? tempPath;
       try {
         // 生成加密文件名
         final encryptedName = StorageService.generateEncryptedFileName(baseName);
@@ -177,13 +192,17 @@ class VideoListProvider extends ChangeNotifier {
         final folderName = targetFolder ?? '';
         final encPath = await StorageService.buildEncPath(folderName, encryptedName);
         final thumbPath = StorageService.buildThumbPath(encPath);
+        final tmpPath = _buildTempOutputPath(encPath);
+        tempPath = tmpPath;
 
-        // 加密视频文件
+        // 加密视频文件（先写临时文件，成功后原子替换）
         await CryptoService.encryptFile(
           path,
-          encPath,
+          tmpPath,
           onProgress: (progress) => controller?.updateProgress(progress),
         );
+        await File(tmpPath).rename(encPath);
+        tempPath = null;
 
         // 生成加密缩略图
         final thumbResult = await ThumbnailService.generateAndEncryptThumbnail(path, thumbPath);
@@ -192,6 +211,9 @@ class VideoListProvider extends ChangeNotifier {
         }
         success++;
       } catch (e) {
+        if (tempPath != null) {
+          await _deleteTempOutputQuietly(tempPath);
+        }
         debugPrint('[SnPlayer] VideoListProvider.encryptVideos: $e');
         failed++;
       }
@@ -215,23 +237,31 @@ class VideoListProvider extends ChangeNotifier {
     final videoId = video.id;
     _setProcessingState(videoId, '正在解密...');
 
+    String? tempPath;
     try {
       final unlockDir = await PathProviderService.getUnlockVideoDir();
       await Directory(unlockDir).create(recursive: true);
 
       final exportPath = p.join(unlockDir, '${video.displayName}.mp4');
+      final tmpPath = _buildTempOutputPath(exportPath);
+      tempPath = tmpPath;
 
       await CryptoService.decryptFile(
         video.encPath,
-        exportPath,
+        tmpPath,
         onProgress: (progress) {
           controller?.updateProgress(progress);
           _setProcessingState(videoId, '解密中 ${(progress * 100).toStringAsFixed(0)}%');
         },
       );
+      await File(tmpPath).rename(exportPath);
+      tempPath = null;
 
       return true;
     } catch (e) {
+      if (tempPath != null) {
+        await _deleteTempOutputQuietly(tempPath);
+      }
       debugPrint('[SnPlayer] VideoListProvider.decryptAndExport: $e');
       _setProcessingState(videoId, '解密失败');
       await Future.delayed(const Duration(seconds: 3));

@@ -1,5 +1,7 @@
 # MewTool VideoEncrypt 视频加密模块 — 技术全景文档
 
+> **注意**：本文档记录的是 MewTool 原始实现（PBKDF2 100,000 次迭代）。当前 SnPlayer 与 snVideoEditor 共用的 v2 格式使用 **10 次迭代**，请以 `docs/encrypted-file-format.md` 为准。
+
 **来源审核：**
 - 来源评级：🟢 A（自研项目源码）
 - 源码位置：`MewTool/Components/Pages/Video/VideoEncrypt.*`（5 个 partial class 文件 + 1 个 razor + 1 个 css）+ `MewTool/Helpers/CryptoHelper.cs` + `MewTool/Helpers/SimpleGifEncoder.cs`

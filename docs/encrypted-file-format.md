@@ -2,14 +2,16 @@
 
 > 本文档面向需要在第三方程序中解密 SN Video Editor 加密文件（`.enc`）的开发者。
 >
-> **当前格式版本：v2（0x02）** ，PBKDF2 迭代 10,000 次。
+> **当前格式版本：v2（0x02）** ，PBKDF2 迭代 10 次。
+>
+> 该格式由 APP SnPlayer 与桌面端 snVideoEditor 共用；修改加密参数、头部布局或计数器语义必须同步两个仓库。仓库地址：APP https://github.com/851039536/SnPlayer ，桌面端 https://github.com/851039536/snVideoEditor 。
 
 ## 一、加密格式总览
 
 |项|值|
 | ----------------| -------------------------------------|
 |加密算法|AES-256-CTR（计数器模式）|
-|密钥派生|PBKDF2-HMAC-SHA256，**1 万次迭代**|
+|密钥派生|PBKDF2-HMAC-SHA256，**10 次迭代**|
 |派生密钥长度|32 字节（256 位）|
 |IV 长度|16 字节（128 位），每次加密随机生成|
 |Salt 长度|16 字节（128 位），每次加密随机生成|
@@ -37,7 +39,7 @@
 PBKDF2(
   password   = "SN-Video-Editor-2026-Default-Key!",   // 默认密码
   salt       = <从文件头偏移 16 处读取的 16 字节>,
-  iterations = 10000,                                   // v2: 1 万次迭代
+  iterations = 10,                                       // v2: 10 次迭代
   keyLen     = 32,                                      // 256 位
   digest     = SHA-256
 )
@@ -61,7 +63,7 @@ SN-Video-Editor-2026-Default-Key!
 3. 提取 IV = header[0:16]
 4. 提取 Salt = header[16:32]
 5. 检查版本号 header[32] == 0x02，不匹配则拒绝
-6. 使用 PBKDF2(password, Salt, 10000, SHA-256) 派生 32 字节 Key
+6. 使用 PBKDF2(password, Salt, 10, SHA-256) 派生 32 字节 Key
 7. 创建 AES-256-CTR 解密器（Key, IV）
 8. 从文件偏移 64 处开始读取密文
 9. 通过解密器解密，写入输出文件
@@ -98,11 +100,11 @@ static void DecryptFile(string inputPath, string outputPath)
     if (version != 0x02)
         throw new InvalidDataException($"不支持的格式版本: 0x{version:x2}");
 
-    // PBKDF2 派生密钥 (v2: 1 万次迭代)
+    // PBKDF2 派生密钥 (v2: 10 次迭代)
     using var pbkdf2 = new Rfc2898DeriveBytes(
         DefaultPassword,
         salt,
-        10000,
+        10,
         HashAlgorithmName.SHA256
     );
     byte[] key = pbkdf2.GetBytes(32);
@@ -135,7 +137,7 @@ function decryptFile(inputPath, outputPath) {
     }
 
     // PBKDF2 派生密钥
-    const key = crypto.pbkdf2Sync(DEFAULT_PASSWORD, salt, 10000, 32, 'sha256');
+    const key = crypto.pbkdf2Sync(DEFAULT_PASSWORD, salt, 10, 32, 'sha256');
 
     // AES-256-CTR 解密
     const fileSize = fs.fstatSync(fd).size;
@@ -177,7 +179,7 @@ def decrypt_file(input_path, output_path):
             raise ValueError(f'不支持的格式版本: 0x{version:02x}')
 
         # PBKDF2 派生密钥
-        key = PBKDF2(DEFAULT_PASSWORD, salt, dkLen=32, count=10000,
+        key = PBKDF2(DEFAULT_PASSWORD, salt, dkLen=32, count=10,
                      hmac_hash_module=hashlib.sha256)
 
         # AES-256-CTR 解密
@@ -216,7 +218,7 @@ openssl enc -d -aes-256-ctr -K <hex_key> -iv $(xxd -p iv.bin) -in cipher.bin -ou
 CTR 加解密逻辑（加密和解密完全相同）：
 
 counter = IV (16 bytes, big-endian integer)
-key = PBKDF2(password, salt, 10000, SHA-256) → 32 bytes
+key = PBKDF2(password, salt, 10, SHA-256) → 32 bytes
 
 for each 16-byte block of plaintext:
     keystream = AES_ECB_encrypt(key, counter)   // 加密 counter 生成密钥流

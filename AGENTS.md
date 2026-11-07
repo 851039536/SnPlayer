@@ -70,9 +70,46 @@ offset 64+:    AES-256-CTR 密文
 - `CryptoService` 使用 **Isolate** 在后台线程执行加解密，避免阻塞 UI。
 - 加密/解密均支持**多 Isolate 并行分块**，`encryptFile`/`decryptFile` 会根据文件大小自动选择路径：≥64MB 走并行（2-6 路），否则串行。并行分块调度器已拆分至 `parallel_crypto_scheduler.dart`（加/解密共用同一参数化调度流程，异步批量合并 + 复制总量校验）。并行路径曾存在文件头版本字节（偏移 32）被截断为 0x00 的 bug，根因是 `_writeBatchToOutput` 使用 `FileMode.write`（等同 `O_TRUNC`）重复打开输出文件，清空了已写入的 64 字节文件头。已于 2026-07-02 修复：改为在整个并行流程中复用同一 `RandomAccessFile` 句柄，由 `try/finally` 保证关闭。并行失败时会清理临时 chunk 文件和损坏的输出文件，进度回调单调递增避免多 chunk 交错跳变。
 - 解密到播放缓存（`decryptToTemp`）先写带微秒时间戳唯一名的 `.decrypting.tmp` 再原子 rename 到最终名，防止半成品被 `PlaybackCacheManager` 误判为有效缓存（TOCTOU）及并发解密同名互踩；rename 失败时若目标缓存大小等于期望解密大小则视为并发赢家已就位正常返回；rename 成功后触发写后容量清理（500MB LRU，豁免刚产出的文件）。
+- 加密导入（`encryptVideos`）与解密导出（`decryptAndExport`）先写带微秒时间戳的 `.tmp`，成功后原子 rename，失败/取消时清理，避免留下半成品。
 - 密钥派生结果使用 LRU 缓存（容量 100），避免重复 PBKDF2 计算。
 - `crypto_isolate.dart` 是 Isolate Worker，在独立线程中执行 encrypt/decrypt 命令，采用双缓冲流水线（4MB 缓冲区）。
 - `utils/crypto_utils.dart` 是纯 Dart 的密码学工具函数（含 64 字节文件头的统一解析/构建 `parseEncHeader`/`buildEncHeader`），不依赖 Flutter/Isolate，可跨平台使用。
+
+### 跨项目联动（snVideoEditor）
+
+本 APP 的 `.enc` 格式与桌面端 **snVideoEditor** 共用，改动加密相关代码必须双向同步。
+
+| 项目 | GitHub | 本地路径 |
+| ---- | ------ | -------- |
+| APP SnPlayer | https://github.com/851039536/SnPlayer | `E:\demo\app\sn-player` |
+| 桌面端 snVideoEditor | https://github.com/851039536/snVideoEditor | `E:\demo\desktop\snVideoEditor` |
+
+共享契约（不得单方面修改）：
+
+- 64B 文件头：`0~15` IV、`16~31` Salt、`32` 版本号 `0x02`、`33~63` 全零
+- PBKDF2-HMAC-SHA256，**10 次迭代**，派生 32B key
+- 默认密码：`SN-Video-Editor-2026-Default-Key!`
+- AES-256-CTR，密文从偏移 64 开始；计数器 = IV + 字节偏移 / 16（大端）
+- 密文必须是连续 CTR 流，不允许插入分块头；并行处理必须 16 字节对齐
+
+联动要求：
+
+1. 修改上述任一参数、头部布局或计数器语义，必须同时修改两个仓库，并在同一次联动变更中完成。
+2. 新增格式版本时，双方必须同时支持旧版本读取，并同步更新两个仓库的 `docs/encrypted-file-format.md`。
+3. 性能优化（分块大小、并行、进度、取消、原子写）不得改变字节级契约；完成后做双向回归：APP 加密 → 桌面解密，桌面加密 → APP 播放。
+4. 加密相关提交请在说明中标注联动影响，例如 `feat(crypto): ... (sync snVideoEditor)`。
+5. 未完成对方仓库同步前，不要单独发布只改一端的加密变更。
+
+联动验收（每次加密改动至少覆盖）：
+
+- 桌面加密一个小文件 + 一个大文件（≥64MB），APP 能播放、拖动进度、导出；
+- APP 加密一个项目，桌面能解密并播放；
+- 确认生成文件头偏移 32 为 `0x02`，PBKDF2 为 10 次。
+
+加密相关文件：
+
+- APP：`lib/config/crypto.dart`、`lib/utils/crypto_utils.dart`、`lib/services/crypto_service.dart`、`lib/services/crypto_isolate.dart`、`lib/services/parallel_crypto_scheduler.dart`
+- 桌面端：`src/main/modules/crypto.ts`、`src/renderer/src/config/crypto.ts`、`docs/encrypted-file-format.md`
 
 ### 视频播放策略（三段式降级）
 
